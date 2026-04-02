@@ -77,6 +77,7 @@ export function createSessionController({
 				pendingPrompt = false;
 				if (actionBusy === "abort") actionBusy = null;
 			}
+			if (actionBusy === "reconnect") actionBusy = null;
 			onStateChange();
 			return true;
 		} catch (error) {
@@ -209,6 +210,13 @@ export function createSessionController({
 
 		if (event.type === "init") {
 			onCloseMenu();
+			const previousState = activeState;
+			const isReconnectInit = Boolean(
+				previousState
+				&& event.state
+				&& typeof previousState.sessionId === "string"
+				&& previousState.sessionId === event.state.sessionId,
+			);
 			activeState = event.state;
 			pendingPrompt = false;
 			actionBusy = null;
@@ -217,10 +225,14 @@ export function createSessionController({
 			role = event.role;
 			lastCliCommand = computeCliCommand(activeState) || lastCliCommand;
 
-			chatView.clear();
-			chatView.renderHistory(activeState.messages || []);
+			if (isReconnectInit) {
+				chatView.syncFromMessages(activeState.messages || []);
+			} else {
+				chatView.clear();
+				chatView.renderHistory(activeState.messages || []);
+			}
 			onStateChange();
-			chatView.scrollToBottom();
+			if (!isReconnectInit) chatView.scrollToBottom(true);
 			return;
 		}
 
@@ -597,19 +609,30 @@ export function createSessionController({
 		}
 	}
 
+	async function reconnectTransport() {
+		if (!activeSessionId) return;
+		closeEvents();
+		connectEvents(activeSessionId);
+		await refreshState({ silent: true, syncMessages: false });
+	}
+
 	async function takeOver() {
 		if (!activeSessionId || actionBusy) return;
-		actionBusy = "takeover";
+		const alreadyController = controllerClientId === clientId;
+		actionBusy = alreadyController ? "reconnect" : "takeover";
 		onStateChange();
 		try {
-			await api.postJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/takeover`, { clientId });
-			controllerClientId = clientId;
-			role = "controller";
+			if (!alreadyController) {
+				await api.postJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/takeover`, { clientId });
+				controllerClientId = clientId;
+				role = "controller";
+			}
+			await reconnectTransport();
 		} catch (error) {
 			if (isSessionGoneError(error)) { handleSessionLost(); return; }
 			throw error;
 		} finally {
-			if (actionBusy === "takeover") actionBusy = null;
+			if (actionBusy === "takeover" || actionBusy === "reconnect") actionBusy = null;
 			onStateChange();
 		}
 	}
