@@ -18,6 +18,10 @@ function shortPath(cwd) {
 	return cwd.replace(/^\/root\//, "~/").replace(/^\/home\/[^/]+\//, "~/");
 }
 
+function isWorktreePath(cwd) {
+	return typeof cwd === "string" && /\/.worktrees\/worktree-/.test(cwd);
+}
+
 function shouldShowSession(s) {
 	if (!s || typeof s !== "object") return false;
 	if (s.isRunning) return true;
@@ -103,6 +107,18 @@ export function createSidebar({
 			activeDeleteTimer = null;
 		}
 		activeDeleteButton = button;
+
+		// Extra warning for worktree sessions with uncommitted/unmerged work
+		if (isWorktreePath(session.cwd)) {
+			const wtName = extractWorktreeName(session.cwd) || session.cwd;
+			const msg = `Delete worktree "${wtName}"?\n\nThis will remove the git worktree, its branch, and all uncommitted changes. Unmerged commits will be lost.\n\nAre you sure?`;
+			if (!window.confirm(msg)) {
+				if (activeDeleteButton === button) activeDeleteButton = null;
+				resetDeleteButton(button);
+				return;
+			}
+		}
+
 		if (row) row.remove();
 		try {
 			if (session.isRunning) {
@@ -117,6 +133,12 @@ export function createSidebar({
 				if (!res.ok) {
 					throw new Error(body.error || `${res.status} ${res.statusText}`);
 				}
+			}
+			// If this is a worktree session, also delete the git worktree + branch
+			if (isWorktreePath(session.cwd)) {
+				try {
+					await fetch(`/api/worktree?path=${encodeURIComponent(session.cwd)}`, { method: "DELETE", headers: api.headers() });
+				} catch { /* best effort */ }
 			}
 			if (session.id === getActiveSessionId()) {
 				onSelectSession(null);
@@ -136,6 +158,7 @@ export function createSidebar({
 		isOpen = Boolean(open);
 		sidebar.classList.toggle("open", isOpen);
 		if (sidebarOverlay) sidebarOverlay.classList.toggle("open", isOpen);
+		document.body?.classList?.toggle("sidebar-open", isOpen);
 	}
 
 	function toggleOpen() { setOpen(!isOpen); }
@@ -146,16 +169,122 @@ export function createSidebar({
 		});
 	}
 
+	function extractWorktreeName(cwd) {
+		const match = String(cwd || "").match(/\/\.worktrees\/worktree-(.+)$/);
+		return match ? match[1] : null;
+	}
+
+	function renderSessionRow(s) {
+		const isWt = isWorktreePath(s.cwd);
+		const wtName = isWt ? extractWorktreeName(s.cwd) : null;
+
+		const row = document.createElement("div");
+		row.className = `si${isWt ? " si-wt" : ""}${s.id === getActiveSessionId() ? " active" : ""}`;
+		row.dataset.sessionId = s.id;
+
+		const stopRowTap = (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+		};
+
+		const sessionLabel = (typeof s.name === "string" && s.name.trim())
+			|| (typeof s.firstMessage === "string" && s.firstMessage.trim())
+			|| s.id.slice(0, 8);
+		const label = isWt
+			? `\ud83c\udf3f ${wtName || sessionLabel}`
+			: String(sessionLabel).replace(/\s+/g, " ").trim().slice(0, 60);
+
+		const name = document.createElement("div");
+		name.className = "si-name";
+		name.textContent = label;
+		name.title = isWt ? `${wtName} — ${String(sessionLabel).slice(0, 60)}` : label;
+
+		const meta = document.createElement("div");
+		meta.className = "si-meta";
+		const rel = formatRelativeTime(s.modified);
+		const dir = shortPath(s.cwd);
+		meta.innerHTML = `${rel}${dir ? ` \u00b7 ${dir}` : ""}${s.isRunning ? ` \u00b7 <span class="si-run">running</span>` : ""}`;
+
+		row.appendChild(name);
+		row.appendChild(meta);
+
+		// Worktree-specific: merge button
+		if (isWt) {
+			const mergeBtn = document.createElement("button");
+			mergeBtn.className = "si-rename";
+			mergeBtn.type = "button";
+			mergeBtn.textContent = "\u2934";
+			mergeBtn.title = `Merge branch worktree-${wtName} into the main branch (like cwm ${wtName})`;
+			mergeBtn.style.right = "74px";
+			mergeBtn.addEventListener("pointerdown", (e) => { stopRowTap(e); });
+			mergeBtn.addEventListener("click", async (e) => {
+				e.stopPropagation();
+				if (!window.confirm(`Merge branch \"worktree-${wtName}\" into the repo's current branch?\n\n\u2022 If there are uncommitted changes, they will be auto-committed first\n\u2022 If the worktree has no new commits, git will say \"Already up to date\"\n\nLike running: cwm ${wtName}`)) return;
+				try {
+					const result = await api.postJson("/api/worktree/merge", { worktreePath: s.cwd });
+					if (result.merged) {
+						onNotice(`\u2705 Merged worktree-${wtName} into main branch. ${result.message}`, "info");
+					} else {
+						onNotice(`\u274c Merge failed for worktree-${wtName}. ${result.message}`, "error");
+					}
+					void refresh({ force: true });
+				} catch (err) {
+					onNotice(err instanceof Error ? err.message : String(err), "error");
+				}
+			});
+			row.appendChild(mergeBtn);
+		}
+
+		const rename = document.createElement("button");
+		rename.className = "si-rename";
+		rename.type = "button";
+		rename.textContent = "\u270e";
+		rename.title = "Rename session";
+		rename.setAttribute("aria-label", rename.title);
+		rename.addEventListener("pointerdown", (e) => { stopRowTap(e); if (e.button !== 0) return; void renameSessionRow(s); });
+		rename.addEventListener("click", stopRowTap);
+		row.appendChild(rename);
+
+		const del = document.createElement("button");
+		del.className = "si-del";
+		del.type = "button";
+		del.textContent = "\u2715";
+		del.title = s.isRunning ? "Stop & delete" : "Delete";
+		del.setAttribute("aria-label", del.title);
+		const handleDeleteTap = () => {
+			if (del.disabled) return;
+			if (del.classList.contains("si-del-sure")) {
+				void deleteSessionRow(s, del, row);
+				return;
+			}
+			armDeleteButton(del);
+		};
+		del.addEventListener("pointerdown", (e) => { stopRowTap(e); if (e.button !== 0) return; handleDeleteTap(); });
+		del.addEventListener("click", stopRowTap);
+		del.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { stopRowTap(e); handleDeleteTap(); } });
+		row.appendChild(del);
+
+		row.addEventListener("click", () => {
+			highlightSessionRow(s.id);
+			void onSelectSession(s);
+		});
+
+		return row;
+	}
+
 	function renderSessionList(sessions) {
 		lastFetchedSessions = Array.isArray(sessions) ? sessions.slice() : [];
 		const query = sessionSearchQuery.trim().toLowerCase();
-		const filtered = query
+		const allFiltered = query
 			? lastFetchedSessions.filter((s) => {
 				const hay = [s?.name || "", s?.firstMessage || "", s?.cwd || "", s?.id || ""].join(" ").toLowerCase();
 				return hay.includes(query);
 			})
 			: lastFetchedSessions.slice();
-		lastRenderedSessions = filtered.slice();
+
+		const normalSessions = allFiltered.filter((s) => !isWorktreePath(s.cwd));
+		const worktreeSessions = allFiltered.filter((s) => isWorktreePath(s.cwd));
+		lastRenderedSessions = allFiltered.slice();
 		consecutiveRefreshFailures = 0;
 		sessionsList.innerHTML = "";
 
@@ -189,7 +318,7 @@ export function createSidebar({
 		searchWrap.appendChild(searchInput);
 		sessionsList.appendChild(searchWrap);
 
-		if (filtered.length === 0) {
+		if (normalSessions.length === 0 && worktreeSessions.length === 0) {
 			const empty = document.createElement("div");
 			empty.className = "si";
 			empty.innerHTML = `<div class="si-meta" style="padding:12px 0">${query ? "No matching sessions" : "No sessions yet"}</div>`;
@@ -197,90 +326,33 @@ export function createSidebar({
 			return;
 		}
 
-		for (const s of filtered) {
-			const row = document.createElement("div");
-			row.className = `si${s.id === getActiveSessionId() ? " active" : ""}`;
-			row.dataset.sessionId = s.id;
+		for (const s of normalSessions) {
+			sessionsList.appendChild(renderSessionRow(s));
+		}
 
-			const stopRowTap = (e) => {
-				e.preventDefault();
-				e.stopPropagation();
-			};
+		if (worktreeSessions.length > 0) {
+			const sectionHdr = document.createElement("div");
+			sectionHdr.className = "sidebar-wt-section-hdr";
+			sectionHdr.textContent = "Worktrees";
+			sessionsList.appendChild(sectionHdr);
 
-			const labelRaw = (typeof s.name === "string" && s.name.trim())
-				|| (typeof s.firstMessage === "string" && s.firstMessage.trim())
-				|| s.id.slice(0, 8);
-			const label = String(labelRaw).replace(/\s+/g, " ").trim().slice(0, 60);
+			const byRepo = new Map();
+			for (const s of worktreeSessions) {
+				const match = String(s.cwd || "").match(/^(.+)\/\.worktrees\//);
+				const repoRoot = match ? match[1] : "unknown";
+				if (!byRepo.has(repoRoot)) byRepo.set(repoRoot, []);
+				byRepo.get(repoRoot).push(s);
+			}
 
-			const name = document.createElement("div");
-			name.className = "si-name";
-			name.textContent = label;
-			name.title = label;
-
-			const meta = document.createElement("div");
-			meta.className = "si-meta";
-			const rel = formatRelativeTime(s.modified);
-			const dir = shortPath(s.cwd);
-			meta.innerHTML = `${rel}${dir ? ` · ${dir}` : ""}${s.isRunning ? ` · <span class="si-run">running</span>` : ""}`;
-
-			row.appendChild(name);
-			row.appendChild(meta);
-
-			const rename = document.createElement("button");
-			rename.className = "si-rename";
-			rename.type = "button";
-			rename.textContent = "✎";
-			rename.title = "Rename session";
-			rename.setAttribute("aria-label", rename.title);
-			rename.addEventListener("pointerdown", (e) => {
-				stopRowTap(e);
-				if (e.button !== 0) return;
-				void renameSessionRow(s);
-			});
-			rename.addEventListener("click", stopRowTap);
-			rename.addEventListener("keydown", (e) => {
-				if (e.key === "Enter" || e.key === " ") {
-					stopRowTap(e);
-					void renameSessionRow(s);
+			for (const [repoRoot, sessions] of byRepo) {
+				const repoHdr = document.createElement("div");
+				repoHdr.className = "sidebar-wt-repo-hdr";
+				repoHdr.textContent = repoRoot.split("/").pop() || repoRoot;
+				sessionsList.appendChild(repoHdr);
+				for (const s of sessions) {
+					sessionsList.appendChild(renderSessionRow(s));
 				}
-			});
-			row.appendChild(rename);
-
-			// Delete button — touch-first in-place "Sure?" confirmation
-			const del = document.createElement("button");
-			del.className = "si-del";
-			del.type = "button";
-			del.textContent = "✕";
-			del.title = s.isRunning ? "Stop & delete" : "Delete";
-			del.setAttribute("aria-label", del.title);
-			const handleDeleteTap = () => {
-				if (del.disabled) return;
-				if (del.classList.contains("si-del-sure")) {
-					void deleteSessionRow(s, del, row);
-					return;
-				}
-				armDeleteButton(del);
-			};
-			del.addEventListener("pointerdown", (e) => {
-				stopRowTap(e);
-				if (e.button !== 0) return;
-				handleDeleteTap();
-			});
-			del.addEventListener("click", stopRowTap);
-			del.addEventListener("keydown", (e) => {
-				if (e.key === "Enter" || e.key === " ") {
-					stopRowTap(e);
-					handleDeleteTap();
-				}
-			});
-			row.appendChild(del);
-
-			row.addEventListener("click", () => {
-				highlightSessionRow(s.id);
-				void onSelectSession(s);
-			});
-
-			sessionsList.appendChild(row);
+			}
 		}
 	}
 
@@ -564,133 +636,15 @@ export function createSidebar({
 		}, 0);
 	}
 
-	function renderWorktreeSection(worktrees) {
-		if (!Array.isArray(worktrees) || worktrees.length === 0) return;
-
-		const sectionHdr = document.createElement("div");
-		sectionHdr.className = "sidebar-wt-section-hdr";
-		sectionHdr.textContent = "Worktrees";
-		sessionsList.appendChild(sectionHdr);
-
-		// Group by repoName
-		const byRepo = new Map();
-		for (const wt of worktrees) {
-			const key = wt.repoRoot || wt.repoName;
-			if (!byRepo.has(key)) byRepo.set(key, { repoName: wt.repoName, repoRoot: wt.repoRoot, items: [] });
-			byRepo.get(key).items.push(wt);
-		}
-
-		for (const [, group] of byRepo) {
-			const repoHdr = document.createElement("div");
-			repoHdr.className = "sidebar-wt-repo-hdr";
-			repoHdr.textContent = group.repoName;
-			sessionsList.appendChild(repoHdr);
-
-			for (const wt of group.items) {
-				const row = document.createElement("div");
-				row.className = "si si-wt";
-
-				const name = document.createElement("div");
-				name.className = "si-name";
-				name.textContent = `\ud83c\udf3f ${wt.name}`;
-				name.title = wt.path;
-
-				const meta = document.createElement("div");
-				meta.className = "si-meta";
-				const parts = [];
-				if (wt.aheadCount > 0) parts.push(`${wt.aheadCount} commit${wt.aheadCount > 1 ? "s" : ""} ahead`);
-				if (wt.hasChanges) parts.push("uncommitted changes");
-				if (wt.isRunning) parts.push(`<span class="si-run">running</span>`);
-				if (parts.length === 0) parts.push("clean");
-				meta.innerHTML = parts.join(" \u00b7 ");
-
-				row.appendChild(name);
-				row.appendChild(meta);
-
-				// Merge button
-				const mergeBtn = document.createElement("button");
-				mergeBtn.className = "si-rename";
-				mergeBtn.type = "button";
-				mergeBtn.textContent = "\u2934";
-				mergeBtn.title = "Merge into main branch";
-				mergeBtn.style.right = "74px";
-				mergeBtn.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); });
-				mergeBtn.addEventListener("click", async (e) => {
-					e.stopPropagation();
-					if (!window.confirm(`Merge worktree "${wt.name}" into main branch?`)) return;
-					try {
-						const result = await api.postJson("/api/worktree/merge", { worktreePath: wt.path });
-						onNotice(result.merged ? `Merged: ${result.message}` : `Failed: ${result.message}`, result.merged ? "info" : "error");
-						void refresh({ force: true });
-					} catch (err) {
-						onNotice(err instanceof Error ? err.message : String(err), "error");
-					}
-				});
-				row.appendChild(mergeBtn);
-
-				// Open button
-				const openBtn = document.createElement("button");
-				openBtn.className = "si-rename";
-				openBtn.type = "button";
-				openBtn.textContent = "\u25b6";
-				openBtn.title = "Open session in this worktree";
-				openBtn.style.right = "40px";
-				openBtn.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); });
-				openBtn.addEventListener("click", async (e) => {
-					e.stopPropagation();
-					try {
-						const result = await api.postJson("/api/sessions", { clientId, cwd: wt.path });
-						onSessionIdSelected(result.sessionId);
-						setOpen(false);
-					} catch (err) {
-						onNotice(err instanceof Error ? err.message : String(err), "error");
-					}
-				});
-				row.appendChild(openBtn);
-
-				// Delete button
-				const del = document.createElement("button");
-				del.className = "si-del";
-				del.type = "button";
-				del.textContent = "\u2715";
-				del.title = "Delete worktree";
-				del.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); });
-				del.addEventListener("click", async (e) => {
-					e.stopPropagation();
-					if (!window.confirm(`Delete worktree "${wt.name}"? This removes the branch and all uncommitted changes.`)) return;
-					try {
-						await fetch(`/api/worktree?path=${encodeURIComponent(wt.path)}`, { method: "DELETE", headers: api.headers() });
-						void refresh({ force: true });
-					} catch (err) {
-						onNotice(err instanceof Error ? err.message : String(err), "error");
-					}
-				});
-				row.appendChild(del);
-
-				row.addEventListener("click", async () => {
-					try {
-						const result = await api.postJson("/api/sessions", { clientId, cwd: wt.path });
-						onSessionIdSelected(result.sessionId);
-						setOpen(false);
-					} catch (err) {
-						onNotice(err instanceof Error ? err.message : String(err), "error");
-					}
-				});
-
-				sessionsList.appendChild(row);
-			}
-		}
-	}
 
 	async function refresh(options = {}) {
 		if (viewMode === "picker" && !options.force) return;
 		viewMode = "sessions";
 		if (sidebarLabel) sidebarLabel.textContent = "Sessions";
 		try {
-			const [activeData, allData, wtData] = await Promise.all([
+			const [activeData, allData] = await Promise.all([
 				api.getJson("/api/active-sessions"),
 				api.getJson("/api/sessions"),
-				api.getJson("/api/worktrees").catch(() => ({ worktrees: [] })),
 			]);
 			const active = Array.isArray(activeData.sessions) ? activeData.sessions : [];
 			const all = Array.isArray(allData.sessions) ? allData.sessions : [];
@@ -711,9 +665,6 @@ export function createSidebar({
 			merged.sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified));
 
 			renderSessionList(merged.slice(0, 50));
-
-			const worktrees = Array.isArray(wtData?.worktrees) ? wtData.worktrees : [];
-			renderWorktreeSection(worktrees);
 		} catch (error) {
 			consecutiveRefreshFailures += 1;
 			if (lastRenderedSessions.length > 0 && consecutiveRefreshFailures < 3) {
@@ -744,6 +695,7 @@ export function createSidebar({
 		toggleOpen,
 		refresh,
 		highlightSessionRow,
+		isOpen: () => isOpen,
 		isPickerOpen: () => viewMode === "picker",
 		setMode: () => {}, // compat
 		updateHeader: () => {}, // compat

@@ -689,6 +689,18 @@ export class PiWebRuntime {
 
 		const cwd = request.cwd ?? process.cwd();
 		await ensureDirectory(cwd);
+
+		// If there's already a running session in this cwd, reuse it
+		for (const [existingId, existing] of this.runningById.entries()) {
+			if (existing.cwd === cwd) {
+				if (existing.controllerClientId === null) {
+					existing.controllerClientId = clientId;
+					this.broadcast(existingId, { type: "controller_changed", controllerClientId: clientId });
+				}
+				return { sessionId: existingId };
+			}
+		}
+
 		const sessionManager = SessionManager.create(cwd);
 		const { session } = await createAgentSession({
 			cwd,
@@ -744,7 +756,9 @@ export class PiWebRuntime {
 			this.assertController(runtime, command.clientId);
 			const bashCommand = typeof command.command === "string" ? command.command.trim() : "";
 			if (!bashCommand) return;
-			await runtime.session.executeBash(bashCommand, undefined, {
+			// session.executeBash uses process.cwd() internally, so wrap with cd to the session's cwd
+			const wrappedCommand = `cd ${JSON.stringify(runtime.cwd)} && ${bashCommand}`;
+			await runtime.session.executeBash(wrappedCommand, undefined, {
 				excludeFromContext: Boolean(command.excludeFromContext),
 			});
 			this.broadcast(sessionId, { type: "state_patch", patch: buildPatch(runtime.session) });
@@ -1026,14 +1040,17 @@ export class PiWebRuntime {
 	}
 
 	private async getRepoRoot(cwd: string): Promise<string | null> {
-		const { stdout, exitCode } = await this.gitExec(cwd, ["rev-parse", "--show-toplevel"]);
-		if (exitCode !== 0 || !stdout) return null;
-		const { stdout: commonDir } = await this.gitExec(stdout, ["rev-parse", "--git-common-dir"]);
-		if (commonDir && commonDir !== ".git" && !commonDir.endsWith("/.git")) {
-			const resolved = resolve(commonDir, "..");
-			if (existsSync(resolved)) return resolved;
+		const { stdout: toplevel, exitCode } = await this.gitExec(cwd, ["rev-parse", "--show-toplevel"]);
+		if (exitCode !== 0 || !toplevel) return null;
+		// --git-common-dir returns the shared .git dir; for worktrees it points to the main repo's .git
+		const { stdout: commonDir } = await this.gitExec(toplevel, ["rev-parse", "--git-common-dir"]);
+		if (commonDir && commonDir !== ".git") {
+			// Resolve to absolute path
+			const absCommon = resolve(toplevel, commonDir);
+			const mainRoot = resolve(absCommon, "..");
+			if (mainRoot !== toplevel && existsSync(mainRoot)) return mainRoot;
 		}
-		return stdout;
+		return toplevel;
 	}
 
 	private async getCurrentBranch(repoRoot: string): Promise<string> {
@@ -1045,9 +1062,17 @@ export class PiWebRuntime {
 		const repos = await this.listRepos();
 		const results: Array<{ name: string; path: string; branch: string; repoRoot: string; repoName: string; hasChanges: boolean; aheadCount: number; isRunning: boolean }> = [];
 
-		for (const repo of repos) {
+		// Also include cwds from running sessions to catch repos not in the saved list
+		const allPaths = new Set(repos);
+		for (const runtime of this.runningById.values()) {
+			if (runtime.cwd) allPaths.add(runtime.cwd);
+		}
+
+		const scannedRoots = new Set<string>();
+		for (const repo of allPaths) {
 			const repoRoot = await this.getRepoRoot(repo);
-			if (!repoRoot) continue;
+			if (!repoRoot || scannedRoots.has(repoRoot)) continue;
+			scannedRoots.add(repoRoot);
 			const wtDir = join(repoRoot, ".worktrees");
 			if (!existsSync(wtDir)) continue;
 

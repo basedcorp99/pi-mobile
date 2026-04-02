@@ -25,6 +25,7 @@ import { createSidebar } from "./ui/sidebar.js";
 const sessionsList = document.getElementById("sessions-list");
 const msgs = document.getElementById("msgs");
 const input = document.getElementById("inp");
+const btnScrollBottom = document.getElementById("btn-scroll-bottom");
 const workingIndicator = document.getElementById("working");
 const workingSpin = document.getElementById("work-spin");
 const workingText = document.querySelector("#working .work-text");
@@ -817,6 +818,31 @@ if (kbEnter) kbEnter.addEventListener("click", () => sendPromptFromInput());
 
 if (sidebarOverlay) sidebarOverlay.addEventListener("click", () => sidebarCtrl.setOpen(false));
 
+// Scroll-to-bottom floating button
+if (btnScrollBottom && msgs) {
+	let scrollBtnRaf = 0;
+	const updateScrollBtn = () => {
+		scrollBtnRaf = 0;
+		const remaining = Math.max(0, msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight);
+		const scrollable = msgs.scrollHeight > msgs.clientHeight + 24;
+		const nearBottom = remaining <= 48;
+		btnScrollBottom.hidden = !scrollable || nearBottom;
+	};
+	const scheduleScrollBtnUpdate = () => {
+		if (scrollBtnRaf) return;
+		scrollBtnRaf = requestAnimationFrame(updateScrollBtn);
+	};
+	msgs.addEventListener("scroll", scheduleScrollBtnUpdate, { passive: true });
+	new ResizeObserver(scheduleScrollBtnUpdate).observe(msgs);
+	new MutationObserver(scheduleScrollBtnUpdate).observe(msgs, { childList: true, subtree: true, characterData: true });
+	window.addEventListener("resize", scheduleScrollBtnUpdate);
+	btnScrollBottom.addEventListener("click", () => {
+		msgs.scrollTop = msgs.scrollHeight;
+		scheduleScrollBtnUpdate();
+	});
+	scheduleScrollBtnUpdate();
+}
+
 input.addEventListener("input", () => autoResize(input));
 input.addEventListener("keydown", (e) => {
 	if (e.key !== "Enter" || e.isComposing) return;
@@ -854,6 +880,8 @@ window.addEventListener("keydown", (e) => {
 fillBorders();
 window.addEventListener("resize", fillBorders);
 window.addEventListener("resize", () => sidebarCtrl.setOpen(false));
+window.addEventListener("pagehide", () => sidebarCtrl?.setOpen?.(false));
+window.addEventListener("beforeunload", () => sidebarCtrl?.setOpen?.(false));
 
 updateFooter();
 updateControls();
@@ -876,40 +904,76 @@ async function openSessionFromParam() {
 
 function installSidebarSwipeGestures() {
 	let tracking = null;
-	const edgeThreshold = 28;
-	const commitThreshold = 70;
-	document.addEventListener("touchstart", (e) => {
-		if (!sidebarCtrl || !e.touches || e.touches.length !== 1) return;
-		const touch = e.touches[0];
-		const sidebarOpen = sidebar?.classList?.contains("open");
-		const inSidebar = sidebar?.contains?.(e.target);
-		const inOverlay = sidebarOverlay?.contains?.(e.target);
-		if (!sidebarOpen && touch.clientX <= edgeThreshold) {
-			tracking = { mode: "open", x: touch.clientX, y: touch.clientY };
-			return;
-		}
-		if (sidebarOpen && (inSidebar || inOverlay)) {
-			tracking = { mode: "close", x: touch.clientX, y: touch.clientY };
-		}
-	}, { passive: true });
-	const reset = () => { tracking = null; };
-	document.addEventListener("touchend", reset, { passive: true });
-	document.addEventListener("touchcancel", reset, { passive: true });
-	document.addEventListener("touchmove", (e) => {
-		if (!tracking || !e.touches || e.touches.length !== 1) return;
-		const touch = e.touches[0];
-		const dx = touch.clientX - tracking.x;
-		const dy = touch.clientY - tracking.y;
-		if (Math.abs(dx) < 20 || Math.abs(dx) < Math.abs(dy)) return;
+	const edgeThreshold = 72;
+	const commitThreshold = 32;
+
+	const shouldCommit = () => {
+		if (!tracking) return;
+		const dx = tracking.lastX - tracking.x;
+		const dy = tracking.lastY - tracking.y;
+		if (Math.abs(dx) < 14 || Math.abs(dx) < Math.abs(dy)) return;
 		if (tracking.mode === "open" && dx > commitThreshold) {
 			sidebarCtrl.setOpen(true);
 			tracking = null;
+			return;
 		}
 		if (tracking.mode === "close" && dx < -commitThreshold) {
 			sidebarCtrl.setOpen(false);
 			tracking = null;
 		}
+	};
+
+	document.addEventListener("touchstart", (e) => {
+		if (!sidebarCtrl || !e.touches || e.touches.length !== 1) return;
+		const touch = e.touches[0];
+		const sidebarOpen = sidebarCtrl.isOpen?.() || sidebar?.classList?.contains("open");
+		const inSidebar = sidebar?.contains?.(e.target);
+		const inOverlay = sidebarOverlay?.contains?.(e.target);
+		if (!sidebarOpen && touch.clientX <= edgeThreshold) {
+			tracking = { mode: "open", x: touch.clientX, y: touch.clientY, lastX: touch.clientX, lastY: touch.clientY };
+			return;
+		}
+		if (sidebarOpen && (inSidebar || inOverlay)) {
+			tracking = { mode: "close", x: touch.clientX, y: touch.clientY, lastX: touch.clientX, lastY: touch.clientY };
+		}
 	}, { passive: true });
+
+	document.addEventListener("touchmove", (e) => {
+		if (!tracking || !e.touches || e.touches.length !== 1) return;
+		const touch = e.touches[0];
+		tracking.lastX = touch.clientX;
+		tracking.lastY = touch.clientY;
+		shouldCommit();
+	}, { passive: true });
+
+	const reset = () => { tracking = null; };
+	document.addEventListener("touchend", () => {
+		shouldCommit();
+		reset();
+	}, { passive: true });
+	document.addEventListener("touchcancel", reset, { passive: true });
+
+	document.addEventListener("touchmove", (e) => {
+		if (!sidebarCtrl?.isOpen?.() || !e.touches || e.touches.length !== 1) return;
+		const target = e.target;
+		if (!sidebar?.contains?.(target)) {
+			e.preventDefault();
+			return;
+		}
+		const scroller = target?.closest?.(".sessions") || sessionsList;
+		if (!scroller) {
+			e.preventDefault();
+			return;
+		}
+		const touch = e.touches[0];
+		const prevY = tracking?.lastY ?? touch.clientY;
+		const dy = touch.clientY - prevY;
+		const atTop = scroller.scrollTop <= 0;
+		const atBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1;
+		if ((atTop && dy > 0) || (atBottom && dy < 0)) {
+			e.preventDefault();
+		}
+	}, { passive: false });
 }
 installSidebarSwipeGestures();
 
