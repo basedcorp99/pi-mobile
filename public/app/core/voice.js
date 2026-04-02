@@ -222,7 +222,7 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 			await acquireWakeLock();
 			onStateChange?.();
 			if (promptedForPermission) {
-				onNotice?.("Microphone authorized — keeping the permission warm for the next few minutes.", "info");
+				onNotice?.("Microphone authorized.", "info");
 			}
 			return { started: true };
 		} catch (error) {
