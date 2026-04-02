@@ -1,11 +1,26 @@
 import { existsSync, unlinkSync, writeFileSync } from "node:fs";
 import { exec, spawn } from "node:child_process";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 
-const PARAKEET_BIN = "/usr/local/bin/parakeet-transcribe";
-const PARAKEET_MODEL = "/usr/local/share/parakeet-tdt-0.6b-v3-int8";
+const HOME = homedir();
+
+function findFirst(candidates: string[]): string | null {
+	for (const p of candidates) {
+		if (existsSync(p)) return p;
+	}
+	return null;
+}
+
+const PARAKEET_BIN = findFirst([
+	join(HOME, ".bin", "parakeet-transcribe"),
+	"/usr/local/bin/parakeet-transcribe",
+]);
+const PARAKEET_MODEL = findFirst([
+	join(HOME, ".local", "share", "parakeet-tdt-0.6b-v3-int8"),
+	"/usr/local/share/parakeet-tdt-0.6b-v3-int8",
+]);
 const FFMPEG_TIMEOUT = 15_000;
 const TRANSCRIBE_TIMEOUT = 120_000;
 
@@ -27,7 +42,7 @@ function ffmpegConvert(inputPath: string, outputPath: string): Promise<void> {
 
 function parakeetTranscribe(wavPath: string): Promise<string> {
 	return new Promise((resolve, reject) => {
-		const proc = spawn("python3", [PARAKEET_BIN, wavPath], {
+		const proc = spawn("python3", [PARAKEET_BIN!, wavPath], {
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		let stdout = "";
@@ -49,7 +64,7 @@ function parakeetTranscribe(wavPath: string): Promise<string> {
 }
 
 export async function transcribeAudio(audioBuffer: Buffer): Promise<{ ok: true; text: string }> {
-	if (!existsSync(PARAKEET_BIN) || !existsSync(PARAKEET_MODEL)) {
+	if (!PARAKEET_BIN || !PARAKEET_MODEL) {
 		throw new Error("Parakeet not available on this server");
 	}
 

@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""Parakeet v3 0.6B TDT transcriber using Handy's model format.
+Usage: parakeet-transcribe <wav_file>
+Outputs transcribed text to stdout.
+"""
+import sys, numpy as np, wave, time
+import onnxruntime as ort
+
+MODEL_DIR = "/usr/local/share/parakeet-tdt-0.6b-v3-int8"
+LEADING_SILENCE_MS = 250
+MAX_TOKENS_PER_STEP = 10
+
+def transcribe(wav_path: str) -> str:
+    with wave.open(wav_path, "rb") as f:
+        data = f.readframes(f.getnframes()); sr = f.getframerate()
+    samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+    silence = np.zeros(int(sr * LEADING_SILENCE_MS / 1000), dtype=np.float32)
+    samples = np.concatenate([silence, samples])
+
+    pp = ort.InferenceSession(f"{MODEL_DIR}/nemo128.onnx")
+    feat, fl = pp.run(None, {
+        "waveforms": samples[np.newaxis].astype(np.float32),
+        "waveforms_lens": np.array([len(samples)], dtype=np.int64),
+    })
+
+    enc = ort.InferenceSession(f"{MODEL_DIR}/encoder-model.int8.onnx")
+    eo_raw, el = enc.run(None, {"audio_signal": feat, "length": fl})
+    eo = np.transpose(eo_raw, (0, 2, 1))  # [batch, hidden, time] -> [batch, time, hidden]
+    T = int(el[0])
+
+    tokens = {}
+    with open(f"{MODEL_DIR}/vocab.txt") as f:
+        for i, l in enumerate(f):
+            tokens[i] = l.strip().split()[0]
+    V = len(tokens); BL = V - 1
+
+    dj = ort.InferenceSession(f"{MODEL_DIR}/decoder_joint-model.int8.onnx")
+    ds = np.zeros((2, 1, 640), dtype=np.float32)
+    di = np.zeros((2, 1, 640), dtype=np.float32)
+
+    prev_tokens = []
+    result_tokens = []
+
+    for t_idx in range(T):
+        enc_in = eo[0, t_idx, :][np.newaxis, :, np.newaxis].astype(np.float32)
+        emitted = 0
+        while emitted < MAX_TOKENS_PER_STEP:
+            last_tok = prev_tokens[-1] if prev_tokens else BL
+            tgt = np.array([[last_tok]], dtype=np.int32)
+            o = dj.run(None, {
+                "encoder_outputs": enc_in,
+                "targets": tgt,
+                "target_length": np.array([1], dtype=np.int32),
+                "input_states_1": ds,
+                "input_states_2": di,
+            })
+            logits = o[0].ravel()[:V]
+            best = int(np.argmax(logits))
+            if best == BL:
+                break
+            prev_tokens.append(best)
+            result_tokens.append(best)
+            ds = o[2]; di = o[3]
+            emitted += 1
+
+    return "".join(tokens.get(t, "") for t in result_tokens).replace("▁", " ").strip()
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: parakeet-transcribe <wav_file>", file=sys.stderr)
+        sys.exit(1)
+    print(transcribe(sys.argv[1]))

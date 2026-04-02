@@ -16,24 +16,52 @@ Web UI for the `pi` coding agent (mobile + desktop).
 
 Sessions are JSONL on disk, same location as native `pi` CLI.
 
-## Quick start
+## Install
 
 ```bash
-bun install
-bun run dev -- --port 4317
+git clone https://github.com/p1rallels/pi-mobile.git
+cd pi-mobile
+./setup.sh
 ```
 
-Open `http://localhost:4317`.
+The setup script:
+- Installs bun dependencies
+- Creates a `pi-mobile` launcher in `~/.bin` and adds it to PATH
+- Optionally installs voice transcription (Parakeet model, ~640MB)
 
-See [RUNBOOK.md](./RUNBOOK.md) for Tailscale / Cloudflare / auth setup.
+After setup:
+
+```bash
+pi-mobile                              # localhost:4317
+pi-mobile --host $(tailscale ip -4)    # tailscale
+pi-mobile --host 0.0.0.0 --port 8080  # public (use --token)
+```
+
+See [RUNBOOK.md](./RUNBOOK.md) for Tailscale / Cloudflare / TLS / auth details.
+
+## Prerequisites
+
+- [bun](https://bun.sh) runtime
+- [pi](https://github.com/badlogic/pi-mono) coding agent
+
+Optional (for voice input):
+- python3, numpy, onnxruntime
+- ffmpeg
 
 ---
 
-## Voice transcription (Parakeet) setup
+## Voice transcription (Parakeet)
 
-`pi-mobile` uses local Parakeet transcription when you tap the mic button.
+Voice is optional — if not installed, the mic button is disabled and the server returns "Parakeet not available".
 
-### 1) Install runtime deps
+The easiest way to set it up is `./setup.sh --all`. It installs everything to user directories (`~/.bin`, `~/.local/share`) — no sudo required.
+
+### Manual setup
+
+<details>
+<summary>Click to expand manual voice setup</summary>
+
+#### 1) Install runtime deps
 
 ```bash
 sudo apt-get update
@@ -41,52 +69,44 @@ sudo apt-get install -y ffmpeg python3 python3-pip
 python3 -m pip install --upgrade numpy onnxruntime
 ```
 
-### 2) Install transcriber script
+#### 2) Install transcriber script
 
-Expected path:
-
-- `/usr/local/bin/parakeet-transcribe`
-
-Make sure it is executable:
+The script is included in the repo as `parakeet-transcribe`. Copy it somewhere in PATH:
 
 ```bash
-sudo chmod +x /usr/local/bin/parakeet-transcribe
+cp parakeet-transcribe ~/.bin/
+chmod +x ~/.bin/parakeet-transcribe
 ```
 
-### 3) Download model files (Handy source URLs)
+pi-mobile checks these locations (first match wins):
+- `~/.bin/parakeet-transcribe`
+- `/usr/local/bin/parakeet-transcribe`
 
-These model archives are the same ones Handy uses:
-
-- Recommended (V3): `https://blob.handy.computer/parakeet-v3-int8.tar.gz`
-- Optional (V2): `https://blob.handy.computer/parakeet-v2-int8.tar.gz`
-- Handy model docs: `https://handy.computer/docs/models`
-
-Install V3 to the path expected by `pi-mobile`:
+#### 3) Download model files
 
 ```bash
 curl -L https://blob.handy.computer/parakeet-v3-int8.tar.gz -o /tmp/parakeet-v3-int8.tar.gz
-sudo mkdir -p /usr/local/share
-sudo tar -xzf /tmp/parakeet-v3-int8.tar.gz -C /usr/local/share
+mkdir -p ~/.local/share
+tar -xzf /tmp/parakeet-v3-int8.tar.gz -C ~/.local/share
+rm /tmp/parakeet-v3-int8.tar.gz
 ```
 
-Expected final model dir:
-
+pi-mobile checks these locations (first match wins):
+- `~/.local/share/parakeet-tdt-0.6b-v3-int8`
 - `/usr/local/share/parakeet-tdt-0.6b-v3-int8`
 
-Required files in that directory are listed in [`PARAKEET_MODEL_FILES.txt`](./PARAKEET_MODEL_FILES.txt).
+Required files are listed in [`PARAKEET_MODEL_FILES.txt`](./PARAKEET_MODEL_FILES.txt).
 
-> Note: model binaries are large and are intentionally not committed to git.
-
-### 4) Health check
+#### 4) Health check
 
 ```bash
-test -x /usr/local/bin/parakeet-transcribe && echo "ok: script"
-for f in $(cat PARAKEET_MODEL_FILES.txt); do test -f "/usr/local/share/parakeet-tdt-0.6b-v3-int8/$f" || echo "missing: $f"; done
+test -x ~/.bin/parakeet-transcribe && echo "ok: script"
+for f in $(cat PARAKEET_MODEL_FILES.txt); do
+  test -f ~/.local/share/parakeet-tdt-0.6b-v3-int8/$f || echo "missing: $f"
+done
 ```
 
-If script or model files are missing, `/api/voice/transcribe` returns:
-
-`Parakeet not available on this server`
+</details>
 
 ---
 
