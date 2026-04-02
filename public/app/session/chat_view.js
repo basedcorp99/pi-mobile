@@ -29,6 +29,20 @@ function summarizeUserContent(content) {
 		.join("|");
 }
 
+function fingerprintUserContent(content) {
+	const blocks = normalizeUserContent(content);
+	const text = blocks
+		.filter((block) => block.type === "text" && typeof block.text === "string")
+		.map((block) => block.text.trim())
+		.join("\n")
+		.replace(/\s+/g, " ")
+		.trim();
+	const images = blocks
+		.filter((block) => block.type === "image" && typeof block.mimeType === "string")
+		.map((block) => String(block.mimeType));
+	return `${text}::${images.join(",")}::${images.length}`;
+}
+
 function renderUserMessageContent(el, content) {
 	const blocks = normalizeUserContent(content);
 	const text = blocks
@@ -51,7 +65,8 @@ function renderUserMessageContent(el, content) {
 			const img = document.createElement("img");
 			img.className = "user-msg-image";
 			img.alt = "attached image";
-			img.loading = "lazy";
+			img.loading = "eager";
+			img.decoding = "async";
 			img.src = `data:${image.mimeType};base64,${image.data}`;
 			gallery.appendChild(img);
 		}
@@ -71,17 +86,54 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 	let appendedUserMessageKeys = new Set();
 	let appendedAssistantMessageKeys = new Set();
 	let optimisticUserSummaries = [];
+	let recentUserFingerprints = [];
 	let subagentCards = new Map();
 	let suppressAutoScroll = false;
+	let autoStickToBottom = true;
+	let internalScroll = false;
 
-	function scrollToBottom() {
-		if (suppressAutoScroll) return;
-		msgsEl.scrollTop = msgsEl.scrollHeight;
-	}
-
-	function isNearBottom(el, thresholdPx = 80) {
+	function isNearBottom(el, thresholdPx = 24) {
 		const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
 		return remaining <= thresholdPx;
+	}
+
+	function scrollToBottom(force = false) {
+		if (suppressAutoScroll) return;
+		if (!force && !autoStickToBottom) return;
+		internalScroll = true;
+		msgsEl.scrollTop = msgsEl.scrollHeight;
+		requestAnimationFrame(() => {
+			internalScroll = false;
+			autoStickToBottom = true;
+		});
+	}
+
+	function shouldAutoStick() {
+		return autoStickToBottom || isNearBottom(msgsEl);
+	}
+
+	function rememberRecentUserFingerprint(fingerprint, timestamp) {
+		recentUserFingerprints.push({ fingerprint, timestamp: typeof timestamp === "number" ? timestamp : null, seenAt: Date.now() });
+		if (recentUserFingerprints.length > 50) recentUserFingerprints = recentUserFingerprints.slice(-50);
+	}
+
+	function hasRecentUserDuplicate(fingerprint, timestamp) {
+		const now = Date.now();
+		return recentUserFingerprints.some((entry) => {
+			if (entry.fingerprint !== fingerprint) return false;
+			if (typeof timestamp === "number" && typeof entry.timestamp === "number") {
+				return Math.abs(entry.timestamp - timestamp) <= 4000;
+			}
+			return now - entry.seenAt <= 4000;
+		});
+	}
+
+	if (msgsEl && !msgsEl.dataset.chatViewScrollBound) {
+		msgsEl.dataset.chatViewScrollBound = "1";
+		msgsEl.addEventListener("scroll", () => {
+			if (internalScroll) return;
+			autoStickToBottom = isNearBottom(msgsEl);
+		});
 	}
 
 	function clear() {
@@ -94,7 +146,9 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 		appendedUserMessageKeys = new Set();
 		appendedAssistantMessageKeys = new Set();
 		optimisticUserSummaries = [];
+		recentUserFingerprints = [];
 		subagentCards = new Map();
+		autoStickToBottom = true;
 	}
 
 	function appendAssistantBlock() {
@@ -132,7 +186,10 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 		} else {
 			msgsEl.appendChild(el);
 		}
-		scrollToBottom();
+		if (opts.forceScroll || shouldAutoStick()) {
+			autoStickToBottom = true;
+			scrollToBottom(true);
+		}
 	}
 
 	function userMessageKey(msg, content) {
@@ -147,23 +204,27 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 		const content = msg.content;
 		const key = userMessageKey(msg, content);
 		if (appendedUserMessageKeys.has(key)) return;
-		const summary = summarizeUserContent(content);
-		const optimisticIdx = optimisticUserSummaries.findIndex((entry) => entry.summary === summary && Date.now() - entry.createdAt < 30000);
+		const fingerprint = fingerprintUserContent(content);
+		const timestamp = typeof msg.timestamp === "number" ? msg.timestamp : null;
+		const optimisticIdx = optimisticUserSummaries.findIndex((entry) => entry.fingerprint === fingerprint && Date.now() - entry.createdAt < 30000);
 		appendedUserMessageKeys.add(key);
 		if (appendedUserMessageKeys.size > 200) appendedUserMessageKeys.clear();
 		if (optimisticIdx !== -1) {
 			optimisticUserSummaries.splice(optimisticIdx, 1);
+			rememberRecentUserFingerprint(fingerprint, timestamp);
 			return;
 		}
+		if (hasRecentUserDuplicate(fingerprint, timestamp)) return;
 
 		const assistant = currentAssistant;
 		const assistantIsEmpty = Boolean(assistant && assistant.rawText === "" && assistant.rawThinking === "");
 		const insertBeforeEl = assistantIsEmpty && assistant.block ? assistant.block : null;
 		appendUserMessage(content, { insertBefore: insertBeforeEl });
+		rememberRecentUserFingerprint(fingerprint, timestamp);
 	}
 
 	function appendNotice(text, kind = "info") {
-		const stick = isNearBottom(msgsEl);
+		const stick = shouldAutoStick();
 		const block = document.createElement("div");
 		block.className = "assistant-block";
 		const el = document.createElement("div");
@@ -244,9 +305,9 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 			entry.meta.textContent = "";
 			entry.meta.style.display = "none";
 		}
-		const stick = isNearBottom(msgsEl);
+		const stick = shouldAutoStick();
 		renderMarkdown(entry.body, data.body || "(no output)");
-		if (stick) scrollToBottom();
+		if (stick) scrollToBottom(true);
 		return true;
 	}
 
@@ -312,7 +373,8 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 		}
 
 		msgsEl.appendChild(block);
-		scrollToBottom();
+		autoStickToBottom = true;
+		scrollToBottom(true);
 	}
 
 	function handleAgentEvent(event) {
@@ -369,7 +431,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 			} else {
 				return;
 			}
-			if (isNearBottom(msgsEl)) scrollToBottom();
+			if (shouldAutoStick()) scrollToBottom(true);
 			return;
 		}
 
@@ -425,20 +487,20 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 
 		if (event.type === "tool_execution_update") {
 			if (!tools.has(event.toolCallId)) return;
-			const stick = isPhoneLikeFn() && isNearBottom(msgsEl);
+			const stick = isPhoneLikeFn() && shouldAutoStick();
 			tools.setText(event.toolCallId, event.toolName, toolResultToText(event.partialResult));
-			if (stick) scrollToBottom();
+			if (stick) scrollToBottom(true);
 			return;
 		}
 
 		if (event.type === "tool_execution_end") {
-			const stick = isPhoneLikeFn() && isNearBottom(msgsEl);
+			const stick = isPhoneLikeFn() && shouldAutoStick();
 			if (!tools.has(event.toolCallId)) {
 				tools.ensure(event.toolCallId, event.toolName, event.isError ? "error" : "success");
 			}
 			tools.setStatus(event.toolCallId, event.isError ? "error" : "success");
 			tools.setText(event.toolCallId, event.toolName, toolResultToText(event.result));
-			if (stick) scrollToBottom();
+			if (stick) scrollToBottom(true);
 			return;
 		}
 	}
@@ -449,14 +511,26 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 		appendNotice,
 		renderHistory,
 		syncFromMessages: (messages) => {
-			const wasNearBottom = isNearBottom(msgsEl);
+			const stick = shouldAutoStick();
+			const prevScrollTop = msgsEl.scrollTop;
 			renderHistory(messages || []);
-			if (wasNearBottom) scrollToBottom();
+			if (stick) {
+				autoStickToBottom = true;
+				scrollToBottom(true);
+			} else {
+				internalScroll = true;
+				msgsEl.scrollTop = prevScrollTop;
+				requestAnimationFrame(() => {
+					internalScroll = false;
+					autoStickToBottom = false;
+				});
+			}
 		},
 		appendOptimisticUserMessage: (content) => {
-			optimisticUserSummaries.push({ summary: summarizeUserContent(content), createdAt: Date.now() });
+			optimisticUserSummaries.push({ fingerprint: fingerprintUserContent(content), createdAt: Date.now() });
 			if (optimisticUserSummaries.length > 50) optimisticUserSummaries = optimisticUserSummaries.slice(-50);
-			appendUserMessage(content);
+			autoStickToBottom = true;
+			appendUserMessage(content, { forceScroll: true });
 		},
 		renderReleased,
 		handleAgentEvent,

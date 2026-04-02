@@ -279,6 +279,12 @@ export function createSidebar({
 		resultsContainer.id = "new-session-results";
 
 		let searchTimer = null;
+		let searchSeq = 0;
+		const filterDirsLocally = (query) => {
+			const q = String(query || "").trim().toLowerCase();
+			if (!q) return repos.slice();
+			return repos.filter((dir) => String(dir || "").toLowerCase().includes(q));
+		};
 		const renderFolderList = (dirs) => {
 			currentResults = Array.isArray(dirs) ? dirs.slice() : [];
 			resultsContainer.innerHTML = "";
@@ -306,38 +312,53 @@ export function createSidebar({
 			const val = pathInput.value.trim();
 			if (searchTimer) clearTimeout(searchTimer);
 			if (!val) {
-				// Show known repos when input is empty
 				renderFolderList(repos);
 				return;
 			}
-			// Debounce fuzzy search
+			renderFolderList(filterDirsLocally(val));
+			const seq = ++searchSeq;
 			searchTimer = setTimeout(async () => {
 				try {
 					const data = await api.getJson(`/api/dirs/search?q=${encodeURIComponent(val)}`);
+					if (seq !== searchSeq || pathInput.value.trim() !== val) return;
 					const dirs = Array.isArray(data.dirs) ? data.dirs : [];
 					renderFolderList(dirs);
 				} catch {
-					renderFolderList([]);
+					if (seq !== searchSeq || pathInput.value.trim() !== val) return;
+					renderFolderList(filterDirsLocally(val));
 				}
 			}, 250);
 		});
 
-		pathInput.addEventListener("keydown", (e) => {
-			if (e.key === "Enter") {
-				e.preventDefault();
-				const val = pathInput.value.trim();
-				if (!val) return;
-				if (currentResults.length > 0) {
-					void startInDir(currentResults[0]);
-					return;
-				}
-				const looksLikePath = val.startsWith("/") || val.startsWith("~/") || val === "~" || val.startsWith("./") || val.startsWith("../");
-				if (looksLikePath) {
-					void startInDir(val);
-					return;
-				}
-				onNotice("No matching directory yet — keep typing or tap a result.", "warning");
+		pathInput.addEventListener("keydown", async (e) => {
+			if (e.key !== "Enter") return;
+			e.preventDefault();
+			const val = pathInput.value.trim();
+			if (!val) {
+				void startInDir("/root");
+				return;
 			}
+			const immediate = currentResults[0] || filterDirsLocally(val)[0] || null;
+			if (immediate) {
+				void startInDir(immediate);
+				return;
+			}
+			const looksLikePath = val.startsWith("/") || val.startsWith("~/") || val === "~" || val.startsWith("./") || val.startsWith("../");
+			if (looksLikePath) {
+				void startInDir(val);
+				return;
+			}
+			try {
+				const data = await api.getJson(`/api/dirs/search?q=${encodeURIComponent(val)}`);
+				const dirs = Array.isArray(data.dirs) ? data.dirs : [];
+				if (dirs[0]) {
+					void startInDir(dirs[0]);
+					return;
+				}
+			} catch {
+				// fall through to default cwd
+			}
+			void startInDir("/root");
 		});
 		inputRow.appendChild(pathInput);
 		sessionsList.appendChild(inputRow);
