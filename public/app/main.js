@@ -508,6 +508,10 @@ menuCtrl = createMenu({
 		if (!pushCtrl) return;
 		await pushCtrl.toggle();
 	},
+	onTestPush: async () => {
+		if (!pushCtrl) return;
+		await pushCtrl.test();
+	},
 	onSetSteeringMode: async (mode) => {
 		await sessionCtrl.setSteeringMode(mode);
 	},

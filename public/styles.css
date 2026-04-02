@@ -339,14 +339,23 @@
 
     /* ── Sidebar ───────────────────────────────────────────── */
     .sidebar {
-      width: 210px;
-      flex-shrink: 0;
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      width: min(340px, 28vw);
+      max-width: 92vw;
       border-right: 1px solid rgba(42, 42, 50, 0.45);
       background: #12121a;
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      z-index: 30;
+      transform: translateX(-105%);
+      transition: transform .12s ease;
+      box-shadow: 0 0 0 1px #2a2a32, 0 18px 48px rgba(0,0,0,.28);
     }
+    .sidebar.open { transform: translateX(0); }
 	    .sidebar-hdr {
 	      padding: 8px 10px 6px;
 	      border-bottom: none;
@@ -485,12 +494,12 @@
     /* ── Mobile Sidebar Overlay ─────────────────────────────── */
     .sidebar-overlay {
       display: none;
-      position: fixed;
-      top: 40px;
+      position: absolute;
+      top: 0;
       left: 0;
       right: 0;
       bottom: 0;
-      background: rgba(0,0,0,.45);
+      background: rgba(0,0,0,.32);
       z-index: 25;
     }
     .sidebar-overlay.open { display: block; }

@@ -44,6 +44,7 @@ export function createMenu({
 	onToggleSendOnEnter,
 	onAdjustFontScale,
 	onTogglePush,
+	onTestPush,
 	onSetSteeringMode,
 	onSetFollowUpMode,
 	onInsertCommand,
@@ -522,6 +523,19 @@ export function createMenu({
 					try {
 						if (typeof onTogglePush === "function") await onTogglePush();
 						renderSettings();
+					} catch (error) {
+						onNotice(error instanceof Error ? error.message : String(error), "error");
+					}
+				} : undefined,
+			}));
+			body.appendChild(makeSetting({
+				name: "Test notifications",
+				value: prefs.pushSupported ? "send" : "unavailable",
+				description: prefs.pushSupported ? "Send a local test notification now." : "Requires browser notification support.",
+				active: false,
+				onClick: prefs.pushSupported ? async () => {
+					try {
+						if (typeof onTestPush === "function") await onTestPush();
 					} catch (error) {
 						onNotice(error instanceof Error ? error.message : String(error), "error");
 					}

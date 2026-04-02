@@ -152,6 +152,39 @@ export function installPushNotifications({ api, btnNotify, lblNotify, onNotice }
 		return subscribe();
 	}
 
+	async function test() {
+		if (!supported) {
+			onNotice?.("Push notifications aren't supported here.", "error");
+			return false;
+		}
+		if (Notification.permission !== "granted") {
+			const permission = await Notification.requestPermission();
+			if (permission !== "granted") {
+				setButtonState();
+				onNotice?.("Notification permission not granted.", "error");
+				return false;
+			}
+		}
+		const reg = await ensureRegistration();
+		try {
+			const title = "pi · test";
+			const options = {
+				body: "This is a test notification from pi-mobile.",
+				tag: `pi-mobile-test-${Date.now()}`,
+				icon: "/icon-192.png",
+				badge: "/icon-192.png",
+				data: { url: "/" },
+			};
+			if (reg?.showNotification) await reg.showNotification(title, options);
+			else new Notification(title, options);
+			onNotice?.("Test notification sent.", "info");
+			return true;
+		} catch (error) {
+			onNotice?.(error instanceof Error ? error.message : String(error), "error");
+			return false;
+		}
+	}
+
 	async function start() {
 		supported = canUsePush();
 		setButtonState();
@@ -180,6 +213,7 @@ export function installPushNotifications({ api, btnNotify, lblNotify, onNotice }
 
 	return {
 		start,
+		test,
 		toggle,
 		subscribe,
 		disable: unsubscribe,

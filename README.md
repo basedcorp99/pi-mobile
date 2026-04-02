@@ -1,30 +1,21 @@
 # pi-mobile
 
-<video src="piwebdemo.mp4" autoplay loop muted playsinline width="400"></video>
+Web UI for the `pi` coding agent (mobile + desktop).
 
-Web UI for the `pi` coding agent, built on the `@mariozechner/pi-coding-agent` SDK.
+`pi-mobile` runs the agent on the host machine and lets you control sessions from browser clients (phone, tablet, laptop).
 
-`pi-mobile` runs the agent on whatever machine hosts the server. You connect from any device (laptop, phone, tablet) to control and view sessions through a browser.
+## What it supports
 
-- Create, resume, and stream sessions live (reasoning, tool calls, output)
-- Stream assistant output, reasoning, and tool execution live
-- Switch model and thinking level mid-session
-- Mobile-friendly: keybar for Esc / Release / Take over / Enter, slide-out sidebar
-- Commands menu shows session commands, prompt templates, and skills
-- Image upload support for prompts, including mobile photo picker / paste
-- Push notifications on iPhone home-screen installs when assistant messages arrive
-- **Tailscale** — bind to your tailnet IP, auto-TLS with MagicDNS, no token needed
-- **Cloudflare Tunnels** — expose securely with `cloudflared`, Cloudflare Access for auth
-- **Face ID / Touch ID** — optional WebAuthn biometric access control on remote
+- Live session streaming (assistant text, reasoning, tools)
+- Create/resume/release sessions
+- Model + thinking controls
+- Prompt images (upload/paste/camera picker)
+- Ask-tool dialogs, commands list, mobile-friendly sidebar
+- Optional push notifications
+- Optional Face ID / Touch ID gate
 
-SDK upstream: https://github.com/badlogic/pi-mono
+Sessions are JSONL on disk, same location as native `pi` CLI.
 
-
-https://github.com/user-attachments/assets/f21f9abf-23e5-43a1-9ef4-40ec70940e78
-
-
-Sessions are JSONL on disk, same location as the native `pi` CLI.
- 
 ## Quick start
 
 ```bash
@@ -34,15 +25,15 @@ bun run dev -- --port 4317
 
 Open `http://localhost:4317`.
 
-Note: Face ID (WebAuthn) is optional and generally requires a hostname like `localhost` or a real domain; raw IPs like `127.0.0.1` may fail. Enable it with `?faceid=1`.
+See [RUNBOOK.md](./RUNBOOK.md) for Tailscale / Cloudflare / auth setup.
 
-See the Runbook (RUNBOOK.md) for Tailscale, Cloudflare, and token auth setup.
+---
 
 ## Voice transcription (Parakeet) setup
 
 `pi-mobile` uses local Parakeet transcription when you tap the mic button.
 
-Required runtime dependencies:
+### 1) Install runtime deps
 
 ```bash
 sudo apt-get update
@@ -50,22 +41,54 @@ sudo apt-get install -y ffmpeg python3 python3-pip
 python3 -m pip install --upgrade numpy onnxruntime
 ```
 
-Required files on the host:
+### 2) Install transcriber script
 
-- Transcriber script: `/usr/local/bin/parakeet-transcribe`
-- Model directory: `/usr/local/share/parakeet-tdt-0.6b-v3-int8`
-- Required model files are listed in [`PARAKEET_MODEL_FILES.txt`](./PARAKEET_MODEL_FILES.txt)
+Expected path:
 
-Note: model binaries are large and are not committed to git; install them on the server at the path above.
+- `/usr/local/bin/parakeet-transcribe`
 
-Quick health check:
+Make sure it is executable:
+
+```bash
+sudo chmod +x /usr/local/bin/parakeet-transcribe
+```
+
+### 3) Download model files (Handy source URLs)
+
+These model archives are the same ones Handy uses:
+
+- Recommended (V3): `https://blob.handy.computer/parakeet-v3-int8.tar.gz`
+- Optional (V2): `https://blob.handy.computer/parakeet-v2-int8.tar.gz`
+- Handy model docs: `https://handy.computer/docs/models`
+
+Install V3 to the path expected by `pi-mobile`:
+
+```bash
+curl -L https://blob.handy.computer/parakeet-v3-int8.tar.gz -o /tmp/parakeet-v3-int8.tar.gz
+sudo mkdir -p /usr/local/share
+sudo tar -xzf /tmp/parakeet-v3-int8.tar.gz -C /usr/local/share
+```
+
+Expected final model dir:
+
+- `/usr/local/share/parakeet-tdt-0.6b-v3-int8`
+
+Required files in that directory are listed in [`PARAKEET_MODEL_FILES.txt`](./PARAKEET_MODEL_FILES.txt).
+
+> Note: model binaries are large and are intentionally not committed to git.
+
+### 4) Health check
 
 ```bash
 test -x /usr/local/bin/parakeet-transcribe && echo "ok: script"
 for f in $(cat PARAKEET_MODEL_FILES.txt); do test -f "/usr/local/share/parakeet-tdt-0.6b-v3-int8/$f" || echo "missing: $f"; done
 ```
 
-If the script or model directory is missing, `/api/voice/transcribe` returns: `Parakeet not available on this server`.
+If script or model files are missing, `/api/voice/transcribe` returns:
+
+`Parakeet not available on this server`
+
+---
 
 ## Data locations
 
@@ -77,10 +100,10 @@ If the script or model directory is missing, `/api/voice/transcribe` returns: `P
 
 ## Session semantics
 
-- **Abort** stops the current run but keeps the session runtime alive. Never deletes JSONL.
-- **Release** aborts and disposes the web runtime so you can safely resume the same JSONL in the native CLI (no concurrent writers).
+- **Abort**: stops current run, keeps runtime alive.
+- **Release**: aborts and disposes runtime so you can safely resume the same JSONL in native `pi`.
 
-Do not open the same session in `pi-web` and the native `pi` CLI simultaneously. Use Release in the web UI before resuming in the CLI.
+Do not open the same session in `pi-mobile` and native `pi` at the same time.
 
 ## Credits
 
