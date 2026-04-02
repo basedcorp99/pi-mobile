@@ -36,10 +36,29 @@ cd "$SCRIPT_DIR"
 bun install --frozen-lockfile 2>/dev/null || bun install
 ok "Dependencies installed"
 
-# ── 3. Create ~/.bin ──────────────────────────────────────────────
+# ── 3. Check for pi + pi-subagents ────────────────────────────────
+check_install_global() {
+  local cmd="$1" pkg="$2"
+  if command -v "$cmd" &>/dev/null; then
+    ok "$cmd found: $("$cmd" --version 2>/dev/null || echo 'installed')"
+  else
+    info "$cmd not found — installing $pkg globally..."
+    npm install -g "$pkg"
+    if command -v "$cmd" &>/dev/null; then
+      ok "$cmd installed successfully"
+    else
+      warn "$cmd install may have succeeded but isn't in PATH yet — restart your shell"
+    fi
+  fi
+}
+
+check_install_global pi @mariozechner/pi-coding-agent
+check_install_global pi-subagents pi-subagents
+
+# ── 4. Create ~/.bin ──────────────────────────────────────────────
 mkdir -p "$BIN_DIR"
 
-# ── 4. Create pi-mobile launcher ─────────────────────────────────
+# ── 5. Create pi-mobile launcher ─────────────────────────────────
 cat > "$BIN_DIR/pi-mobile" << 'LAUNCHER'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -75,7 +94,7 @@ sed -i "s|__SCRIPT_DIR__|$SCRIPT_DIR|g" "$BIN_DIR/pi-mobile"
 chmod +x "$BIN_DIR/pi-mobile"
 ok "Installed pi-mobile launcher → $BIN_DIR/pi-mobile"
 
-# ── 5. Add ~/.bin to PATH if needed ──────────────────────────────
+# ── 6. Add ~/.bin to PATH if needed ──────────────────────────────
 add_to_path() {
   local shell_rc="$1"
   local line='export PATH="$HOME/.bin:$PATH"'
@@ -106,7 +125,7 @@ else
   ok "~/.bin already in PATH"
 fi
 
-# ── 6. Voice transcription (Parakeet) ────────────────────────────
+# ── 7. Voice transcription (Parakeet) ────────────────────────────
 PARAKEET_BIN="$BIN_DIR/parakeet-transcribe"
 PARAKEET_MODEL_DIR="$HOME/.local/share/parakeet-tdt-0.6b-v3-int8"
 PARAKEET_URL="https://blob.handy.computer/parakeet-v3-int8.tar.gz"
@@ -190,7 +209,7 @@ else
   fi
 fi
 
-# ── 7. Summary ────────────────────────────────────────────────────
+# ── 8. Summary ────────────────────────────────────────────────────
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 ok "Setup complete!"
