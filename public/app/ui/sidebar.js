@@ -40,6 +40,7 @@ export function createSidebar({
 	getActiveSessionId,
 	onSelectSession,
 	onSessionIdSelected,
+	onRenameSession,
 }) {
 	let isOpen = false;
 	let viewMode = "sessions";
@@ -74,6 +75,26 @@ export function createSidebar({
 			resetDeleteButton(button);
 			activeDeleteTimer = null;
 		}, 2500);
+	}
+
+	async function renameSessionRow(session) {
+		if (typeof onRenameSession !== "function") return;
+		const currentLabel = (typeof session?.name === "string" && session.name.trim())
+			|| (typeof session?.firstMessage === "string" && session.firstMessage.trim())
+			|| "";
+		const next = window.prompt("Rename session", currentLabel);
+		if (next === null) return;
+		const trimmed = next.trim();
+		if (!trimmed) {
+			onNotice("Session name cannot be empty", "error");
+			return;
+		}
+		try {
+			await onRenameSession(session, trimmed);
+			await refresh({ force: true });
+		} catch (err) {
+			onNotice(err instanceof Error ? err.message : String(err), "error");
+		}
 	}
 
 	async function deleteSessionRow(session, button, row) {
@@ -181,6 +202,11 @@ export function createSidebar({
 			row.className = `si${s.id === getActiveSessionId() ? " active" : ""}`;
 			row.dataset.sessionId = s.id;
 
+			const stopRowTap = (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+			};
+
 			const labelRaw = (typeof s.name === "string" && s.name.trim())
 				|| (typeof s.firstMessage === "string" && s.firstMessage.trim())
 				|| s.id.slice(0, 8);
@@ -200,6 +226,26 @@ export function createSidebar({
 			row.appendChild(name);
 			row.appendChild(meta);
 
+			const rename = document.createElement("button");
+			rename.className = "si-rename";
+			rename.type = "button";
+			rename.textContent = "✎";
+			rename.title = "Rename session";
+			rename.setAttribute("aria-label", rename.title);
+			rename.addEventListener("pointerdown", (e) => {
+				stopRowTap(e);
+				if (e.button !== 0) return;
+				void renameSessionRow(s);
+			});
+			rename.addEventListener("click", stopRowTap);
+			rename.addEventListener("keydown", (e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					stopRowTap(e);
+					void renameSessionRow(s);
+				}
+			});
+			row.appendChild(rename);
+
 			// Delete button — touch-first in-place "Sure?" confirmation
 			const del = document.createElement("button");
 			del.className = "si-del";
@@ -207,10 +253,6 @@ export function createSidebar({
 			del.textContent = "✕";
 			del.title = s.isRunning ? "Stop & delete" : "Delete";
 			del.setAttribute("aria-label", del.title);
-			const stopRowTap = (e) => {
-				e.preventDefault();
-				e.stopPropagation();
-			};
 			const handleDeleteTap = () => {
 				if (del.disabled) return;
 				if (del.classList.contains("si-del-sure")) {
@@ -268,11 +310,11 @@ export function createSidebar({
 
 		// Fuzzy search input
 		const inputRow = document.createElement("div");
-		inputRow.style.cssText = "padding:8px 12px;";
+		inputRow.className = "sessions-search-wrap";
 		const pathInput = document.createElement("input");
+		pathInput.className = "sessions-search";
 		pathInput.type = "text";
 		pathInput.placeholder = "Search folders…";
-		pathInput.style.cssText = "width:100%;padding:8px;background:#1a1a1a;border:1px solid #333;color:#eee;border-radius:6px;font-size:13px;box-sizing:border-box;";
 
 		// Container for folder results
 		const resultsContainer = document.createElement("div");
@@ -291,7 +333,10 @@ export function createSidebar({
 			if (dirs.length === 0) {
 				const hint = document.createElement("div");
 				hint.className = "si";
-				hint.innerHTML = `<div class="si-meta" style="padding:8px 0">No matching directories.</div>`;
+				const meta = document.createElement("div");
+				meta.className = "si-meta new-session-empty";
+				meta.textContent = "No matching directories.";
+				hint.appendChild(meta);
 				resultsContainer.appendChild(hint);
 				return;
 			}

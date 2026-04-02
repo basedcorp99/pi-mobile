@@ -85,6 +85,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 	let currentAssistant = null; // { block, text, thinking, rawText, rawThinking }
 	let appendedUserMessageKeys = new Set();
 	let appendedAssistantMessageKeys = new Set();
+	let appendedBashMessageKeys = new Set();
 	let optimisticUserSummaries = [];
 	let recentUserFingerprints = [];
 	let subagentCards = new Map();
@@ -145,6 +146,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 		tools.clear();
 		appendedUserMessageKeys = new Set();
 		appendedAssistantMessageKeys = new Set();
+		appendedBashMessageKeys = new Set();
 		optimisticUserSummaries = [];
 		recentUserFingerprints = [];
 		subagentCards = new Map();
@@ -275,6 +277,36 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 		return renderAssistantMessage(msg);
 	}
 
+	function bashMessageKey(message) {
+		const ts = message && typeof message.timestamp === "number" ? message.timestamp : null;
+		const summary = `${message?.command || ""}|${message?.exitCode ?? ""}|${message?.output?.length ?? 0}|${message?.cancelled ? "cancelled" : ""}`;
+		return ts !== null ? `b:${ts}:${summary}` : `b:${summary}`;
+	}
+
+	function maybeAppendBashMessage(message) {
+		if (!message || message.role !== "bashExecution") return;
+		const key = bashMessageKey(message);
+		if (appendedBashMessageKeys.has(key)) return;
+		appendedBashMessageKeys.add(key);
+		if (appendedBashMessageKeys.size > 200) appendedBashMessageKeys.clear();
+		const block = document.createElement("div");
+		block.className = `tool-box ${message.cancelled ? "error" : Number(message.exitCode) === 0 ? "success" : "error"}`;
+		const title = document.createElement("div");
+		title.className = "tool-title";
+		title.textContent = message.excludeFromContext ? "Shell (not sent to AI)" : "Shell";
+		const call = document.createElement("div");
+		call.className = "tool-call";
+		call.textContent = message.command || "";
+		const out = document.createElement("div");
+		out.className = "tool-out";
+		out.textContent = message.output || (message.cancelled ? "Command aborted" : "(no output)");
+		block.appendChild(title);
+		block.appendChild(call);
+		block.appendChild(out);
+		msgsEl.appendChild(block);
+		if (shouldAutoStick()) scrollToBottom(true);
+	}
+
 	function upsertSubagentCard(message) {
 		const data = parseSubagentSlashMessage(message);
 		if (!data) return false;
@@ -324,6 +356,8 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 			} else if (m.role === "assistant") {
 				maybeAppendAssistantMessage(m);
 				currentAssistant = null;
+			} else if (m.role === "bashExecution") {
+				maybeAppendBashMessage(m);
 			} else if (m.role === "toolResult") {
 				const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : safeRandomUUID();
 				const toolName = typeof m.toolName === "string" ? m.toolName : "tool";

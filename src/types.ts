@@ -119,6 +119,8 @@ export interface ApiAskSelection {
 
 export type ApiCommandRequest =
 	| { type: "prompt"; clientId: string; text: string; images?: ApiImageContent[]; deliverAs?: "followUp" | "steer" }
+	| { type: "bash"; clientId: string; command: string; excludeFromContext?: boolean }
+	| { type: "abort_bash"; clientId: string }
 	| { type: "compact"; clientId: string; customInstructions?: string }
 	| { type: "ask_response"; clientId: string; askId: string; cancelled?: boolean; selections: ApiAskSelection[] }
 	| { type: "ui_response"; clientId: string; uiId: string; cancelled?: boolean; value?: string }

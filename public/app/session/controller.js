@@ -499,8 +499,60 @@ export function createSessionController({
 		});
 	}
 
+	async function runBash(commandText, options = {}) {
+		if (!activeSessionId || actionBusy) return;
+		const command = String(commandText || "").trim();
+		if (!command) return;
+		actionBusy = "bash";
+		onStateChange();
+		try {
+			await api.postJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/command`, {
+				type: "bash",
+				clientId,
+				command,
+				excludeFromContext: Boolean(options.excludeFromContext),
+			});
+			await refreshState({ silent: true, syncMessages: true });
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			if (msg.includes("Not controller") || msg.includes("not_controller")) {
+				try {
+					await api.postJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/takeover`, { clientId });
+					controllerClientId = clientId;
+					role = "controller";
+					await api.postJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/command`, {
+						type: "bash",
+						clientId,
+						command,
+						excludeFromContext: Boolean(options.excludeFromContext),
+					});
+					await refreshState({ silent: true, syncMessages: true });
+					return;
+				} catch (retryError) {
+					if (isSessionGoneError(retryError)) { handleSessionLost(); return; }
+					chatView.appendNotice("Failed to take control of session", "error");
+					return;
+				}
+			}
+			if (isSessionGoneError(error)) { handleSessionLost(); return; }
+			chatView.appendNotice(msg, "error");
+		} finally {
+			if (actionBusy === "bash") actionBusy = null;
+			onStateChange();
+		}
+	}
+
 	async function sendPrompt(text, images = []) {
 		if (!activeSessionId) return;
+		const trimmedText = typeof text === "string" ? text.trim() : "";
+		if (images.length === 0 && /^!!\s*\S/.test(trimmedText)) {
+			await runBash(trimmedText.replace(/^!!\s*/, ""), { excludeFromContext: true });
+			return;
+		}
+		if (images.length === 0 && /^!\s*\S/.test(trimmedText)) {
+			await runBash(trimmedText.replace(/^!\s*/, ""), { excludeFromContext: false });
+			return;
+		}
 		pendingPrompt = true;
 		chatView.appendOptimisticUserMessage([
 			...(text ? [{ type: "text", text }] : []),
@@ -585,7 +637,20 @@ export function createSessionController({
 	}
 
 	async function abortRun() {
-		if (!activeSessionId || actionBusy) return;
+		if (!activeSessionId) return;
+		if (actionBusy === "bash") {
+			try {
+				await api.postJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/command`, { type: "abort_bash", clientId });
+			} catch (error) {
+				if (isSessionGoneError(error)) { handleSessionLost(); return; }
+				chatView.appendNotice(error instanceof Error ? error.message : String(error), "error");
+			} finally {
+				if (actionBusy === "bash") actionBusy = null;
+				onStateChange();
+			}
+			return;
+		}
+		if (actionBusy) return;
 		const hadPendingTools = chatView.hasPendingTools();
 		const hadAssistant = chatView.hasAssistant();
 		const hadStreaming = Boolean(activeState?.isStreaming);
@@ -670,6 +735,26 @@ export function createSessionController({
 		});
 	}
 
+	async function setSessionName(name) {
+		if (!activeSessionId) return;
+		const trimmed = String(name || "").trim();
+		if (!trimmed) throw new Error("Session name cannot be empty");
+		const payload = { type: "set_session_name", clientId, name: trimmed };
+		try {
+			await api.postJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/command`, payload);
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			if (msg.includes("Not controller") || msg.includes("not_controller")) {
+				await api.postJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/takeover`, { clientId });
+				controllerClientId = clientId;
+				role = "controller";
+				await api.postJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/command`, payload);
+				return;
+			}
+			throw error;
+		}
+	}
+
 	function openSessionId(sessionId) {
 		actionBusy = null;
 		activeSessionId = sessionId;
@@ -694,8 +779,10 @@ export function createSessionController({
 		sendUiResponse,
 		setSteeringMode,
 		setFollowUpMode,
+		setSessionName,
 		abortRun,
 		compact,
+		runBash,
 		takeOver,
 		release,
 		openSessionId,

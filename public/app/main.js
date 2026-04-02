@@ -253,7 +253,7 @@ function updateAttachmentControls() {
 	const hasSession = Boolean(sessionCtrl.getActiveSessionId());
 	const isController = hasSession && sessionCtrl.isController();
 	const actionBusy = sessionCtrl.getActionBusy ? sessionCtrl.getActionBusy() : null;
-	const disabled = !hasSession || !isController || actionBusy === "release" || actionBusy === "compact";
+	const disabled = !hasSession || !isController || actionBusy === "release" || actionBusy === "compact" || actionBusy === "bash";
 	if (btnCommands) btnCommands.disabled = disabled;
 	if (btnAttach) btnAttach.disabled = disabled;
 	if (btnVoice) btnVoice.disabled = disabled || !voiceUiReady || voiceRecorder?.isTranscribing?.();
@@ -291,9 +291,11 @@ function updateWorkingIndicator() {
 					? "Releasing…"
 					: actionBusy === "compact"
 						? "Compacting…"
-						: actionBusy === "abort"
-							? "Aborting…"
-							: "Working...";
+						: actionBusy === "bash"
+							? "Running shell…"
+							: actionBusy === "abort"
+								? "Aborting…"
+								: "Working...";
 	}
 
 	const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -324,27 +326,27 @@ function updateControls() {
 	const actionBusy = sessionCtrl.getActionBusy ? sessionCtrl.getActionBusy() : null;
 	const canChangeSettings = hasSession && isController && !streaming && !actionBusy;
 
-	btnAbort.disabled = !hasSession || Boolean(actionBusy && actionBusy !== "abort");
+	btnAbort.disabled = !hasSession || Boolean(actionBusy && actionBusy !== "abort" && actionBusy !== "bash");
 	btnTakeover.disabled = !hasSession || Boolean(actionBusy);
 	if (btnCompact) btnCompact.disabled = !hasSession || !isController || streaming || Boolean(actionBusy);
 	btnRelease.disabled = !hasSession || !isController || Boolean(actionBusy);
-	input.disabled = !hasSession || !isController || actionBusy === "release" || actionBusy === "compact";
+	input.disabled = !hasSession || !isController || actionBusy === "release" || actionBusy === "compact" || actionBusy === "bash";
 	if (btnModel) btnModel.disabled = !canChangeSettings;
 	if (btnThinking) btnThinking.disabled = !canChangeSettings;
 	if (btnTakeoverTxt) btnTakeoverTxt.textContent = actionBusy === "takeover" ? "Taking…" : actionBusy === "reconnect" ? "Reconnecting…" : isController ? "Reconnect" : "Take over";
 	if (kbTakeoverTextNode) kbTakeoverTextNode.textContent = actionBusy === "takeover" ? " Taking…" : actionBusy === "reconnect" ? " Reconnecting…" : isController ? " Reconnect" : " Take over";
-	if (btnAbortTxt) btnAbortTxt.textContent = actionBusy === "abort" ? "Aborting…" : "Abort";
-	if (kbAbortTextNode) kbAbortTextNode.textContent = actionBusy === "abort" ? " Aborting…" : " Abort";
+	if (btnAbortTxt) btnAbortTxt.textContent = actionBusy === "abort" ? "Aborting…" : actionBusy === "bash" ? "Stop" : "Abort";
+	if (kbAbortTextNode) kbAbortTextNode.textContent = actionBusy === "abort" ? " Aborting…" : actionBusy === "bash" ? " Stop" : " Abort";
 	if (btnCompactTxt) btnCompactTxt.textContent = actionBusy === "compact" ? "Compacting…" : "Compact";
 	if (kbCompactTextNode) kbCompactTextNode.textContent = actionBusy === "compact" ? " Compacting…" : " Compact";
 	if (btnReleaseTxt) btnReleaseTxt.textContent = actionBusy === "release" ? "Releasing…" : "Release";
 	updateAttachmentControls();
 
-	if (kbAbort) kbAbort.disabled = !hasSession || Boolean(actionBusy && actionBusy !== "abort");
+	if (kbAbort) kbAbort.disabled = !hasSession || Boolean(actionBusy && actionBusy !== "abort" && actionBusy !== "bash");
 	if (kbTakeover) kbTakeover.disabled = !hasSession || Boolean(actionBusy);
 	if (kbRelease) kbRelease.disabled = !hasSession || !isController || Boolean(actionBusy);
 	if (kbCompact) kbCompact.disabled = !hasSession || !isController || streaming || Boolean(actionBusy);
-	if (kbEnter) kbEnter.disabled = !hasSession || !isController || actionBusy === "release" || actionBusy === "compact";
+	if (kbEnter) kbEnter.disabled = !hasSession || !isController || actionBusy === "release" || actionBusy === "compact" || actionBusy === "bash";
 
 	if (!hasSession) {
 		input.placeholder = "";
@@ -489,6 +491,13 @@ sidebarCtrl = createSidebar({
 		sessionCtrl.openSessionId(sessionId);
 		clearAttachments();
 		updateControls();
+	},
+	onRenameSession: async (session, name) => {
+		if (!session) return;
+		if (sessionCtrl.getActiveSessionId() !== session.id) {
+			await sessionCtrl.selectSession(session);
+		}
+		await sessionCtrl.setSessionName(name);
 	},
 });
 

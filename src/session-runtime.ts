@@ -740,6 +740,23 @@ export class PiWebRuntime {
 			return;
 		}
 
+		if (command.type === "bash") {
+			this.assertController(runtime, command.clientId);
+			const bashCommand = typeof command.command === "string" ? command.command.trim() : "";
+			if (!bashCommand) return;
+			await runtime.session.executeBash(bashCommand, undefined, {
+				excludeFromContext: Boolean(command.excludeFromContext),
+			});
+			this.broadcast(sessionId, { type: "state_patch", patch: buildPatch(runtime.session) });
+			return;
+		}
+
+		if (command.type === "abort_bash") {
+			this.assertController(runtime, command.clientId);
+			runtime.session.abortBash();
+			return;
+		}
+
 		if (command.type === "prompt") {
 			this.assertController(runtime, command.clientId);
 			const text = typeof command.text === "string" ? command.text.trim() : "";

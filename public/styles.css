@@ -524,9 +524,10 @@
       outline: none;
     }
     .sessions-search::placeholder { color: #666666; }
+    .new-session-empty { padding: 8px 0; }
     .si {
       display: flex; flex-direction: column;
-      padding: 5px 44px 5px 8px; border-radius: 6px; cursor: pointer;
+      padding: 5px 80px 5px 8px; border-radius: 6px; cursor: pointer;
       border: 1px solid transparent; transition: all .1s;
       min-width: 0;
     }
@@ -537,7 +538,11 @@
     .si.active .si-name { color: #b5bd68; }
     .si-run { color: #b5bd68; }
     .si { position: relative; }
-    .si-del { position:absolute; right:6px; top:50%; transform:translateY(-50%); background:none; border:1px solid #333; color:#666; font-size:11px; min-width:28px; height:28px; border-radius:6px; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0 8px; transition: all .12s; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+    .si-rename,
+    .si-del { position:absolute; top:50%; transform:translateY(-50%); background:none; border:1px solid #333; color:#666; font-size:11px; min-width:28px; height:28px; border-radius:6px; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0 8px; transition: color .12s, border-color .12s, background-color .12s, opacity .12s; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+    .si-rename { right:40px; }
+    .si-del { right:6px; }
+    .si-rename:hover { color:#8abeb7; border-color:#8abeb7; }
     .si-del:hover { color:#e55; border-color:#e55; }
     .si-del:disabled { opacity:.7; cursor:progress; }
     .si-del.si-del-sure { width:auto; max-width:72px; color:#e55; border-color:#e55; background:rgba(238,85,85,.1); font-weight:600; }
@@ -1139,6 +1144,7 @@
       .si { padding-top: 9px; padding-bottom: 9px; }
       .si-name { font-size: 15px; }
       .si-meta { font-size: 12px; }
+      .si-rename,
       .si-del { min-width: 36px; height: 36px; font-size: 13px; }
     }
 
@@ -1237,7 +1243,9 @@
     body.light .si.active .si-name { color: #2a7a3a; }
     body.light .si-meta { color: #888; }
     body.light .si-run { color: #2a7a3a; }
+    body.light .si-rename,
     body.light .si-del { border-color:#c0c0ba; color:#888; }
+    body.light .si-rename:hover { color:#2a7a6a; border-color:#2a7a6a; }
     body.light .si-del:hover { color:#c44; border-color:#c44; }
     body.light .si-del.si-del-sure { background:#fdeaea; border-color:#d77; color:#b33; }
     body.light .si-del.si-del-busy { background:#f7efe1; border-color:#d4b07a; color:#9a6a2f; }
