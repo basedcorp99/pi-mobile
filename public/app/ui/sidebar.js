@@ -358,12 +358,14 @@ export function createSidebar({
 
 	async function showNewSessionPicker() {
 		viewMode = "picker";
-		let repos = [];
 		let currentResults = [];
-		try {
-			const data = await api.getJson("/api/repos");
-			repos = Array.isArray(data.repos) ? data.repos : [];
-		} catch { /* ignore */ }
+		let recentDirs = [];
+
+		// Fetch recent/known repos in background (non-blocking)
+		const reposPromise = api.getJson("/api/repos").then((data) => {
+			recentDirs = Array.isArray(data.repos) ? data.repos : [];
+			return recentDirs;
+		}).catch(() => []);
 
 		// Show inline picker replacing the session list
 		sessionsList.innerHTML = "";
@@ -386,7 +388,9 @@ export function createSidebar({
 		const pathInput = document.createElement("input");
 		pathInput.className = "sessions-search";
 		pathInput.type = "text";
-		pathInput.placeholder = "Search folders…";
+		pathInput.placeholder = "Type to search any folder on the server…";
+		pathInput.autocomplete = "off";
+		pathInput.spellcheck = false;
 
 		// Container for folder results
 		const resultsContainer = document.createElement("div");
@@ -394,12 +398,35 @@ export function createSidebar({
 
 		let searchTimer = null;
 		let searchSeq = 0;
-		const filterDirsLocally = (query) => {
+		let isSearching = false;
+
+		const filterDirsLocally = (query, pool) => {
 			const q = String(query || "").trim().toLowerCase();
-			if (!q) return repos.slice();
-			return repos.filter((dir) => String(dir || "").toLowerCase().includes(q));
+			if (!q) return pool.slice();
+			const tokens = q.split(/[\s/_-]+/).filter(Boolean);
+			return pool
+				.map((dir) => {
+					const lower = String(dir || "").toLowerCase();
+					const base = lower.split("/").pop() || lower;
+					let score = 0;
+					if (base === q) score += 2000;
+					else if (base.startsWith(q)) score += 1200;
+					else if (base.includes(q)) score += 900;
+					else if (lower.includes(q)) score += 500;
+					if (tokens.length > 1 && tokens.every((t) => lower.includes(t))) score += 400;
+					if (score <= 0) {
+						const compactQ = q.replace(/[^a-z0-9]+/g, "");
+						const compactB = base.replace(/[^a-z0-9]+/g, "");
+						if (compactQ && compactB.includes(compactQ)) score += 700;
+					}
+					return { dir, score };
+				})
+				.filter((entry) => entry.score > 0)
+				.sort((a, b) => b.score - a.score)
+				.map((entry) => entry.dir);
 		};
-		const renderFolderList = (dirs) => {
+
+		const renderFolderList = (dirs, emptyMessage) => {
 			currentResults = Array.isArray(dirs) ? dirs.slice() : [];
 			resultsContainer.innerHTML = "";
 			if (dirs.length === 0) {
@@ -407,7 +434,7 @@ export function createSidebar({
 				hint.className = "si";
 				const meta = document.createElement("div");
 				meta.className = "si-meta new-session-empty";
-				meta.textContent = "No matching directories.";
+				meta.textContent = emptyMessage || "No matching folders.";
 				hint.appendChild(meta);
 				resultsContainer.appendChild(hint);
 				return;
@@ -425,26 +452,60 @@ export function createSidebar({
 			}
 		};
 
+		const showSearching = () => {
+			if (!isSearching) return;
+			const existing = resultsContainer.querySelector(".new-session-searching");
+			if (existing) return;
+			const hint = document.createElement("div");
+			hint.className = "si new-session-searching";
+			const meta = document.createElement("div");
+			meta.className = "si-meta new-session-empty";
+			meta.textContent = "Searching…";
+			hint.appendChild(meta);
+			resultsContainer.appendChild(hint);
+		};
+
+		const doRemoteSearch = async (val, seq) => {
+			try {
+				isSearching = true;
+				if (currentResults.length === 0) showSearching();
+				const data = await api.getJson(`/api/dirs/search?q=${encodeURIComponent(val)}`);
+				if (seq !== searchSeq || pathInput.value.trim() !== val) return;
+				const dirs = Array.isArray(data.dirs) ? data.dirs : [];
+				isSearching = false;
+				if (dirs.length > 0) {
+					renderFolderList(dirs);
+				} else if (currentResults.length === 0) {
+					renderFolderList([], "No matching folders on this server.");
+				}
+			} catch {
+				isSearching = false;
+				if (seq !== searchSeq || pathInput.value.trim() !== val) return;
+				if (currentResults.length === 0) {
+					renderFolderList(filterDirsLocally(val, recentDirs), "No matching folders.");
+				}
+			}
+		};
+
 		pathInput.addEventListener("input", () => {
 			const val = pathInput.value.trim();
 			if (searchTimer) clearTimeout(searchTimer);
 			if (!val) {
-				renderFolderList(repos);
+				if (recentDirs.length > 0) {
+					renderFolderList(recentDirs);
+				} else {
+					renderFolderList([], "Type to search any folder on the server.");
+				}
 				return;
 			}
-			renderFolderList(filterDirsLocally(val));
+			// Immediate local filter for snappy feedback
+			const localHits = filterDirsLocally(val, recentDirs);
+			if (localHits.length > 0) renderFolderList(localHits);
+			else renderFolderList([], "Searching…");
+
+			// Fire remote search quickly (150ms debounce)
 			const seq = ++searchSeq;
-			searchTimer = setTimeout(async () => {
-				try {
-					const data = await api.getJson(`/api/dirs/search?q=${encodeURIComponent(val)}`);
-					if (seq !== searchSeq || pathInput.value.trim() !== val) return;
-					const dirs = Array.isArray(data.dirs) ? data.dirs : [];
-					renderFolderList(dirs);
-				} catch {
-					if (seq !== searchSeq || pathInput.value.trim() !== val) return;
-					renderFolderList(filterDirsLocally(val));
-				}
-			}, 250);
+			searchTimer = setTimeout(() => void doRemoteSearch(val, seq), 150);
 		});
 
 		pathInput.addEventListener("keydown", async (e) => {
@@ -455,9 +516,9 @@ export function createSidebar({
 				void startInDir("/root");
 				return;
 			}
-			const immediate = currentResults[0] || filterDirsLocally(val)[0] || null;
-			if (immediate) {
-				void startInDir(immediate);
+			// Use first visible result if available
+			if (currentResults.length > 0) {
+				void startInDir(currentResults[0]);
 				return;
 			}
 			const looksLikePath = val.startsWith("/") || val.startsWith("~/") || val === "~" || val.startsWith("./") || val.startsWith("../");
@@ -465,6 +526,7 @@ export function createSidebar({
 				void startInDir(val);
 				return;
 			}
+			// Last resort: fire a remote search and use first result
 			try {
 				const data = await api.getJson(`/api/dirs/search?q=${encodeURIComponent(val)}`);
 				const dirs = Array.isArray(data.dirs) ? data.dirs : [];
@@ -481,8 +543,13 @@ export function createSidebar({
 		sessionsList.appendChild(inputRow);
 		sessionsList.appendChild(resultsContainer);
 
-		// Show known repos initially
-		renderFolderList(repos);
+		// Show initial state: loading recent dirs, then show them or hint
+		renderFolderList([], "Loading…");
+		reposPromise.then((repos) => {
+			if (pathInput.value.trim()) return; // user already typing
+			if (repos.length > 0) renderFolderList(repos);
+			else renderFolderList([], "Type to search any folder on the server.");
+		});
 		setTimeout(() => pathInput.focus(), 0);
 	}
 

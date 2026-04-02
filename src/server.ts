@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { PiWebRuntime, type SessionClient } from "./session-runtime.ts";
 import { FaceIdService } from "./faceid.ts";
@@ -269,41 +269,224 @@ function requireJsonBody(req: Request): Promise<Record<string, unknown>> {
 	return req.json().catch(() => ({}));
 }
 
-function fuzzyFindDirs(query: string): Promise<string[]> {
+// ── Directory search infrastructure ────────────────────────────────
+const DIRECTORY_SEARCH_LIMIT = 20;
+const DIRECTORY_SEARCH_CACHE_TTL_MS = 60_000;
+const DIRECTORY_SEARCH_ROOTS = ["/root", "/home"];
+const directoryIndexCache: {
+	dirs: string[];
+	expiresAt: number;
+	inflight: Promise<string[]> | null;
+} = {
+	dirs: [],
+	expiresAt: 0,
+	inflight: null,
+};
+
+function hasExecutable(path: string | null | undefined): path is string {
+	return Boolean(path && existsSync(path));
+}
+
+function isSearchableDirectory(path: string): boolean {
+	const normalized = path.trim();
+	if (!normalized) return false;
+	const skip = ["/.git", "/node_modules", "/dist", "/build", "/coverage", "/.next", "/.turbo", "/target", "/.cache", "/.bun/install/cache", "/.pi/agent/sessions"];
+	for (const seg of skip) {
+		if (normalized.includes(seg + "/") || normalized.endsWith(seg)) return false;
+	}
+	return true;
+}
+
+function parseSearchLines(stdout: string): string[] {
+	return stdout
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(Boolean)
+		.filter((line) => isSearchableDirectory(line));
+}
+
+function splitSearchTokens(input: string): string[] {
+	return input.toLowerCase().split(/[\s/_-]+/).map((t) => t.trim()).filter(Boolean);
+}
+
+function compactText(input: string): string {
+	return input.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function isSubsequence(needle: string, haystack: string): boolean {
+	if (!needle) return true;
+	let idx = 0;
+	for (const ch of haystack) {
+		if (ch === needle[idx]) idx += 1;
+		if (idx >= needle.length) return true;
+	}
+	return false;
+}
+
+function scoreDirectoryMatch(path: string, query: string): number {
+	const lp = path.toLowerCase();
+	const parts = lp.split("/").filter(Boolean);
+	const base = parts[parts.length - 1] || lp;
+	const q = query.trim().toLowerCase();
+	const tokens = splitSearchTokens(q);
+	const cq = compactText(q);
+	const cb = compactText(base);
+	const cp = compactText(lp);
+	let score = 0;
+
+	if (base === q || (cq && cb === cq)) score += 2_000;
+	if (base.startsWith(q) || (cq && cb.startsWith(cq))) score += 1_200;
+	if (base.includes(q) || (cq && cb.includes(cq))) score += 900;
+	if (lp.includes(q)) score += 500;
+	if (tokens.length > 0 && tokens.every((t) => base.includes(t))) score += 700;
+	if (tokens.length > 0 && tokens.every((t) => lp.includes(t))) score += 400;
+	if (cq && isSubsequence(cq, cb)) score += 280;
+	if (cq && isSubsequence(cq, cp)) score += 140;
+
+	// Heavily penalize deep subdirectories — users want project roots
+	score -= parts.length * 30;
+	// Bonus for top-level project dirs (e.g. /root/foo)
+	if (parts.length <= 2) score += 200;
+	else if (parts.length <= 3) score += 80;
+	// Worktrees are useful to show at similar level to their parent
+	if (lp.includes("/.worktrees/worktree-")) {
+		const wtDepth = lp.split("/.worktrees/worktree-")[1];
+		if (wtDepth && !wtDepth.includes("/")) score += 150; // worktree root, not subfolder
+	}
+	if (lp.startsWith("/root/")) score += 10;
+	return score;
+}
+
+function uniqueDirs(paths: string[]): string[] {
+	const seen = new Set<string>();
+	const result: string[] = [];
+	for (const p of paths) {
+		const n = p.trim();
+		if (!n || seen.has(n) || !isSearchableDirectory(n)) continue;
+		seen.add(n);
+		result.push(n);
+	}
+	return result;
+}
+
+function buildDirectoryIndex(): Promise<string[]> {
+	const roots = DIRECTORY_SEARCH_ROOTS.filter((r) => existsSync(r));
+	if (roots.length === 0) return Promise.resolve([]);
+
+	const rootsArg = roots.map((r) => JSON.stringify(r)).join(" ");
+	const cmd = `find ${rootsArg} \\( -name .git -o -name node_modules -o -name dist -o -name build -o -name coverage -o -name .next -o -name .turbo -o -name target -o -name .cache \\) -prune -o -type d -print 2>/dev/null`;
+
 	return new Promise((resolve, reject) => {
-		const trimmed = query.trim();
-		if (!trimmed) return resolve([]);
-
-		const zoxideBin = existsSync("/root/.local/bin/zoxide") ? "/root/.local/bin/zoxide" : "zoxide";
-		const fdBin = existsSync("/root/.pi/agent/bin/fd") ? "/root/.pi/agent/bin/fd" : "fd";
-		const fzfBin = existsSync("/usr/bin/fzf") ? "/usr/bin/fzf" : "fzf";
-
-		const finish = (zoxideOut: string, fdFzfOut: string) => {
-			const seen = new Set<string>();
-			const dirs = [...zoxideOut.split("\n"), ...fdFzfOut.split("\n")]
-				.map((line) => line.trim())
-				.filter(Boolean)
-				.filter((line) => {
-					if (seen.has(line)) return false;
-					seen.add(line);
-					return true;
-				})
-				.slice(0, 20);
-			resolve(dirs);
-		};
-
-		// Prefer zoxide ranking first (great for short repo names like "machinx").
-		execFile(zoxideBin, ["query", "-l", trimmed], { timeout: 1500 }, (zErr, zStdout) => {
-			if (zErr && (zErr as any).killed) return reject(new Error("Search timed out"));
-
-			// Then widen via fd + fzf over actual directories.
-			const cmd = `${JSON.stringify(fdBin)} --type d --hidden --exclude node_modules --exclude .git . /root /home 2>/dev/null | ${JSON.stringify(fzfBin)} --filter=${JSON.stringify(trimmed)} | head -20`;
-			execFile("bash", ["-lc", cmd], { timeout: 5000 }, (fdErr, fdStdout) => {
-				if (fdErr && (fdErr as any).killed) return reject(new Error("Search timed out"));
-				finish(zStdout || "", fdStdout || "");
-			});
+		execFile("bash", ["-lc", cmd], { timeout: 15_000, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
+			if (error && (error as NodeJS.ErrnoException).killed) return reject(new Error("Search timed out"));
+			resolve(uniqueDirs(parseSearchLines(stdout || "")));
 		});
 	});
+}
+
+async function getDirectoryIndex(): Promise<string[]> {
+	if (directoryIndexCache.dirs.length > 0 && directoryIndexCache.expiresAt > Date.now()) {
+		return directoryIndexCache.dirs;
+	}
+	if (directoryIndexCache.inflight) return directoryIndexCache.inflight;
+
+	const inflight = buildDirectoryIndex()
+		.then((dirs) => {
+			directoryIndexCache.dirs = dirs;
+			directoryIndexCache.expiresAt = Date.now() + DIRECTORY_SEARCH_CACHE_TTL_MS;
+			return dirs;
+		})
+		.finally(() => {
+			directoryIndexCache.inflight = null;
+		});
+
+	directoryIndexCache.inflight = inflight;
+	return inflight;
+}
+
+function queryZoxideDirs(query: string): Promise<string[]> {
+	const zoxideBin = hasExecutable("/root/.local/bin/zoxide")
+		? "/root/.local/bin/zoxide"
+		: hasExecutable("/usr/bin/zoxide")
+			? "/usr/bin/zoxide"
+			: hasExecutable("/usr/local/bin/zoxide")
+				? "/usr/local/bin/zoxide"
+				: null;
+	if (!zoxideBin) return Promise.resolve([]);
+
+	return new Promise((resolve, reject) => {
+		execFile(zoxideBin, ["query", "-l", query], { timeout: 1_500 }, (error, stdout) => {
+			if (error && (error as NodeJS.ErrnoException).killed) return reject(new Error("Search timed out"));
+			resolve(uniqueDirs(parseSearchLines(stdout || "")));
+		});
+	});
+}
+
+function queryFzfDirs(query: string, dirs: string[]): Promise<string[]> {
+	const fzfBin = hasExecutable("/usr/bin/fzf")
+		? "/usr/bin/fzf"
+		: hasExecutable("/usr/local/bin/fzf")
+			? "/usr/local/bin/fzf"
+			: null;
+	if (!fzfBin || dirs.length === 0) return Promise.resolve([]);
+
+	return new Promise((resolve) => {
+		const child = spawn(fzfBin, ["--filter", query], { stdio: ["pipe", "pipe", "pipe"] });
+		let stdout = "";
+		let settled = false;
+		const timeout = setTimeout(() => {
+			settled = true;
+			child.kill("SIGKILL");
+			resolve([]);
+		}, 2_500);
+
+		child.on("error", () => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeout);
+			resolve([]);
+		});
+		child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+		child.on("close", () => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeout);
+			resolve(uniqueDirs(parseSearchLines(stdout)));
+		});
+		child.stdin.end(`${dirs.join("\n")}\n`);
+	});
+}
+
+function rankDirectoryMatches(query: string, dirs: string[]): string[] {
+	return uniqueDirs(dirs)
+		.map((path) => ({ path, score: scoreDirectoryMatch(path, query) }))
+		.filter((e) => e.score > 0)
+		.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
+		.slice(0, DIRECTORY_SEARCH_LIMIT)
+		.map((e) => e.path);
+}
+
+async function fuzzyFindDirs(query: string): Promise<string[]> {
+	const trimmed = query.trim();
+	if (!trimmed) return [];
+
+	const dirs = await getDirectoryIndex();
+	const rankedFallback = rankDirectoryMatches(trimmed, dirs);
+	const [zoxideResults, fzfResults] = await Promise.all([
+		queryZoxideDirs(trimmed).catch(() => [] as string[]),
+		queryFzfDirs(trimmed, dirs).catch(() => [] as string[]),
+	]);
+
+	const zoxideSet = new Set(zoxideResults);
+	const fzfSet = new Set(fzfResults);
+	return uniqueDirs([...zoxideResults, ...fzfResults, ...rankedFallback])
+		.map((path) => ({
+			path,
+			score: scoreDirectoryMatch(path, trimmed) + (zoxideSet.has(path) ? 600 : 0) + (fzfSet.has(path) ? 250 : 0),
+		}))
+		.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
+		.slice(0, DIRECTORY_SEARCH_LIMIT)
+		.map((e) => e.path);
 }
 
 function isApiPath(pathname: string): boolean {
