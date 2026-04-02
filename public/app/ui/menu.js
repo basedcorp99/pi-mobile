@@ -142,12 +142,16 @@ export function createMenu({
 
 	async function openModelMenu() {
 		if (!btnModel || btnModel.disabled) return;
+		if (menuOverlay) menuOverlay.dataset.locked = "1";
 		openMenu(btnModel, (panel) => {
 			const hdr = document.createElement("div");
 			hdr.className = "menu-hdr";
 			const title = document.createElement("div");
 			title.className = "menu-title";
 			title.textContent = "Model";
+			const actions = document.createElement("div");
+			actions.style.display = "flex";
+			actions.style.gap = "6px";
 			const refresh = document.createElement("button");
 			refresh.className = "menu-mini";
 			refresh.textContent = "Refresh";
@@ -156,15 +160,21 @@ export function createMenu({
 				cachedModelsAtMs = 0;
 				await openModelMenu();
 			});
+			const closeBtn = document.createElement("button");
+			closeBtn.className = "menu-mini";
+			closeBtn.textContent = "Close";
+			closeBtn.addEventListener("click", () => close());
+			actions.appendChild(refresh);
+			actions.appendChild(closeBtn);
 			hdr.appendChild(title);
-			hdr.appendChild(refresh);
+			hdr.appendChild(actions);
 
 			const body = document.createElement("div");
 			body.className = "menu-body";
 
 			const search = document.createElement("input");
 			search.className = "menu-search";
-			search.placeholder = "Search models…";
+			search.placeholder = "Search model name…";
 
 			const list = document.createElement("div");
 			list.className = "menu-list";
@@ -174,7 +184,7 @@ export function createMenu({
 				list.innerHTML = "";
 				const activeState = getActiveState();
 				const currentKey = activeState?.model ? `${activeState.model.provider}/${activeState.model.id}` : null;
-				const filtered = models.filter((m) => fuzzyMatch(query, `${m.provider}/${m.id} ${m.name || ""}`));
+				const filtered = models.filter((m) => fuzzyMatch(query, `${m.name || m.id}`));
 				const shown = filtered.slice(0, 200);
 				if (shown.length === 0) {
 					const empty = document.createElement("div");

@@ -8,7 +8,7 @@
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-  <link rel="stylesheet" href="/styles.css?v=20260402ae" />
+  <link rel="stylesheet" href="/styles.css?v=1775136940" />
 </head>
 <body>
 
@@ -52,6 +52,10 @@
       <button class="top-btn warn" id="btn-abort" title="Abort current run (Esc)">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12"/></svg>
         <span class="txt">Abort</span>
+      </button>
+      <button class="top-btn" id="btn-compact" title="Run /compact">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 4H4v4"/><path d="M16 4h4v4"/><path d="M8 20H4v-4"/><path d="M16 20h4v-4"/></svg>
+        <span class="txt">Compact</span>
       </button>
       <button class="top-btn" id="btn-release" title="Release web runtime for native CLI">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v10"/><path d="M18.36 6.64a9 9 0 1 1-12.72 0"/></svg>
@@ -114,7 +118,7 @@
         <div class="editor-inner">
           <textarea class="editor-input" id="inp" rows="1" placeholder="" enterkeyhint="send"></textarea>
           <div class="editor-btns">
-            <button class="attach-btn secondary" id="btn-commands" type="button">/Cmds</button>
+            <button class="attach-btn secondary" id="btn-commands" type="button">Agents</button>
             <button class="attach-btn attach-icon" id="btn-attach" type="button" title="Attach image">📎</button>
             <button class="attach-btn voice-btn" id="btn-voice" type="button" title="Voice note">🎙</button>
             <button class="keybtn keybtn-icon ok" id="kb-enter" title="Send (Enter)" aria-label="Send">
@@ -139,6 +143,6 @@
 	    <div class="menu-scrim" id="menu-scrim"></div>
 	    <div class="menu-panel" id="menu-panel"></div>
 	  </div>
-	  <script type="module" src="/app.js?v=20260402ae"></script>
+	  <script type="module" src="/app.js?v=1775136940"></script>
 	</body>
 	</html>

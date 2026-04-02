@@ -333,6 +333,133 @@
 	      font-size: 16px;
 	      line-height: 1;
 	    }
+	    .agent-launcher-body {
+	      display: flex;
+	      flex-direction: column;
+	      gap: 12px;
+	      padding-bottom: 16px;
+	    }
+	    .agent-launcher-intro {
+	      color: #808080;
+	      font-size: 12px;
+	      line-height: 1.4;
+	    }
+	    .agent-launcher-tabs {
+	      display: flex;
+	      flex-wrap: wrap;
+	      gap: 8px;
+	    }
+	    .agent-launcher-tab.active {
+	      background: #1e2a20;
+	      border-color: #2a3a2a;
+	      color: #b5bd68;
+	    }
+	    .agent-launcher-steps {
+	      display: flex;
+	      flex-direction: column;
+	      gap: 10px;
+	    }
+	    .agent-launcher-step {
+	      border: 1px solid #2a2a32;
+	      border-radius: 12px;
+	      background: #17171f;
+	      padding: 12px;
+	      display: flex;
+	      flex-direction: column;
+	      gap: 10px;
+	    }
+	    .agent-launcher-step-hdr {
+	      display: flex;
+	      align-items: center;
+	      justify-content: space-between;
+	      gap: 10px;
+	    }
+	    .agent-launcher-step-title {
+	      color: #d4d4d4;
+	      font-size: 12px;
+	      font-weight: 600;
+	    }
+	    .agent-launcher-grid {
+	      display: grid;
+	      grid-template-columns: repeat(2, minmax(0, 1fr));
+	      gap: 10px;
+	    }
+	    .agent-launcher-field {
+	      display: flex;
+	      flex-direction: column;
+	      gap: 6px;
+	      min-width: 0;
+	    }
+	    .agent-launcher-label {
+	      color: #808080;
+	      font-size: 11px;
+	      text-transform: uppercase;
+	      letter-spacing: .06em;
+	    }
+	    .agent-launcher-select,
+	    .agent-launcher-textarea {
+	      width: 100%;
+	      border-radius: 10px;
+	      border: 1px solid #2a2a32;
+	      background: #1e1e28;
+	      color: #d4d4d4;
+	      font: inherit;
+	      padding: 10px 12px;
+	      outline: none;
+	    }
+	    .agent-launcher-select {
+	      min-height: 42px;
+	    }
+	    .agent-launcher-textarea {
+	      resize: vertical;
+	      min-height: 84px;
+	      line-height: 1.45;
+	    }
+	    .agent-launcher-meta {
+	      color: #666666;
+	      font-size: 11px;
+	      line-height: 1.35;
+	      min-height: 15px;
+	    }
+	    .agent-launcher-add {
+	      align-self: flex-start;
+	    }
+	    .agent-launcher-options {
+	      display: flex;
+	      flex-wrap: wrap;
+	      gap: 14px;
+	      padding-top: 2px;
+	    }
+	    .agent-launcher-check {
+	      display: inline-flex;
+	      align-items: center;
+	      gap: 6px;
+	      color: #808080;
+	      font-size: 12px;
+	    }
+	    .agent-launcher-preview {
+	      border: 1px dashed #2a2a32;
+	      border-radius: 10px;
+	      padding: 10px 12px;
+	      color: #8abeb7;
+	      background: #141a1c;
+	      font-size: 12px;
+	      white-space: pre-wrap;
+	      word-break: break-word;
+	      line-height: 1.4;
+	    }
+	    .agent-launcher-actions {
+	      display: flex;
+	      justify-content: flex-end;
+	      gap: 8px;
+	      padding-top: 4px;
+	    }
+	    .agent-launcher-run {
+	      background: #1e2a20;
+	      border-color: #2a3a2a;
+	      color: #b5bd68;
+	      padding-inline: 12px;
+	    }
 
 	    /* ── Layout ────────────────────────────────────────────── */
 	    .layout { display: flex; flex: 1; overflow: hidden; position: relative; }
@@ -866,6 +993,12 @@
     @media (max-width: 740px) {
       .sidebar { width: 180px; }
       .top-btn span.txt { display: none; }
+      .agent-launcher-grid { grid-template-columns: 1fr; }
+      .agent-launcher-actions {
+        flex-direction: column-reverse;
+        align-items: stretch;
+      }
+      .agent-launcher-actions .menu-mini { width: 100%; }
     }
 
     @media (hover: none) and (pointer: coarse) and (max-width: 740px) {
@@ -1092,6 +1225,17 @@
     body.light .ask-option-primary { color: #1f1f1f; }
     body.light .ask-option-secondary { color: #666 !important; }
     body.light .ask-nav { border-top-color: #d0d0ca; }
+    body.light .agent-launcher-intro,
+    body.light .agent-launcher-label,
+    body.light .agent-launcher-check,
+    body.light .agent-launcher-meta { color: #666; }
+    body.light .agent-launcher-step { background: #f6f6f1; border-color: #d8d8d2; }
+    body.light .agent-launcher-step-title { color: #1f1f1f; }
+    body.light .agent-launcher-select,
+    body.light .agent-launcher-textarea { background: #fff; border-color: #d0d0ca; color: #1f1f1f; }
+    body.light .agent-launcher-preview { background: #edf4f1; border-color: #c9d8d1; color: #2a6a60; }
+    body.light .agent-launcher-tab.active,
+    body.light .agent-launcher-run { background: #e0f0e2; border-color: #b0d8b0; color: #3a7a3a; }
     body.light .sidebar-overlay.open { background: rgba(0,0,0,.2); }
     body.light .user-msg-image { border-color: #d0d0ca; background: #fff; }
     body.light .working .work-spin { color: #2a7a6a; }

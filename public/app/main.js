@@ -49,6 +49,7 @@ const btnSidebarRight = document.getElementById("btn-sidebar-right");
 
 const btnTakeover = document.getElementById("btn-takeover");
 const btnAbort = document.getElementById("btn-abort");
+const btnCompact = document.getElementById("btn-compact");
 const btnRelease = document.getElementById("btn-release");
 const btnTakeoverTxt = btnTakeover?.querySelector?.(".txt") || null;
 const btnAbortTxt = btnAbort?.querySelector?.(".txt") || null;
@@ -305,6 +306,7 @@ function updateControls() {
 
 	btnAbort.disabled = !hasSession || Boolean(actionBusy && actionBusy !== "abort");
 	btnTakeover.disabled = !hasSession || isController || streaming || Boolean(actionBusy);
+	if (btnCompact) btnCompact.disabled = !hasSession || !isController || streaming || Boolean(actionBusy);
 	btnRelease.disabled = !hasSession || !isController || Boolean(actionBusy);
 	input.disabled = !hasSession || !isController || actionBusy === "release";
 	if (btnModel) btnModel.disabled = !canChangeSettings;
@@ -598,6 +600,11 @@ document.addEventListener("visibilitychange", () => {
 });
 
 btnAbort.addEventListener("click", () => void sessionCtrl.abortRun());
+if (btnCompact) btnCompact.addEventListener("click", () => {
+	void sessionCtrl.sendPrompt("/compact").catch((error) => {
+		sessionCtrl.appendNotice(error instanceof Error ? error.message : String(error), "error");
+	});
+});
 btnTakeover.addEventListener("click", () => {
 	void sessionCtrl.takeOver().catch((error) => {
 		sessionCtrl.appendNotice(error instanceof Error ? error.message : String(error), "error");
@@ -751,7 +758,7 @@ if (btnCommands) {
 	btnCommands.addEventListener("mousedown", (e) => e.preventDefault());
 	btnCommands.addEventListener("click", () => {
 		if (document.activeElement === input) input.blur();
-		setTimeout(() => menuCtrl.openCommandsMenu(), 50);
+		setTimeout(() => agentLauncher?.show?.(), 50);
 	});
 }
 
