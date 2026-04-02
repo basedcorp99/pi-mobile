@@ -562,6 +562,7 @@
       font-size: 13.5px;
       user-select: none;
     }
+    .working.open { display: flex; }
     .working .work-spin {
       display: inline-block;
       width: 1ch;
@@ -1005,16 +1006,39 @@
     @media (hover: none) and (pointer: coarse) and (max-width: 740px) {
       .working.open { display: flex; }
       .working { font-size: 16px; }
-      .keybar { display: flex; gap: 6px; padding: 6px 8px; overflow-x: hidden; flex-wrap: wrap; }
-      .keybtn { padding: 6px 8px; min-width: 0; }
+      .keybar { display: flex; gap: 4px; padding: 6px 8px; overflow-x: hidden; flex-wrap: nowrap; }
+      .keybar-top { gap: 4px; }
+      .keybar-top .keybtn {
+        flex: 1 1 0;
+        justify-content: center;
+        min-width: 0;
+        white-space: nowrap;
+      }
+      .keybtn { padding: 6px 7px; min-width: 0; font-size: 11px; }
       .attach-btn { padding: 6px 8px; }
       .attach-icon, .keybtn-icon { width: 36px; min-width: 36px; padding: 6px; }
+      .editor-inner {
+        flex-wrap: wrap;
+        align-items: stretch;
+        padding: 4px 10px 4px 12px;
+        gap: 8px;
+      }
+      .editor-inner .editor-input {
+        flex: 1 1 100%;
+        width: 100%;
+        min-width: 100%;
+      }
+      .editor-btns {
+        width: 100%;
+        justify-content: flex-end;
+        padding-bottom: 0;
+      }
       /* Phone header simplification */
       #btn-model .sel, #btn-model .chev { display: none; }
       #btn-model span.txt { display: inline; }
       #btn-thinking span.txt, #btn-thinking .sel, #btn-thinking .chev { display: none; }
       #btn-thinking .ico { display: inline-flex; }
-      #btn-abort, #btn-release, #btn-takeover { display: none; }
+      #btn-abort, #btn-release, #btn-takeover, #btn-compact { display: none; }
 
       /* Prevent iOS input focus zoom + horizontal drift */
       .editor-input { font-size: 16px !important; }
@@ -1074,7 +1098,22 @@
       }
       .app-logo { font-size: 21px; }
       .top-pill { font-size: 13px; padding: 6px 12px; }
-      .editor-inner { padding-top: 4px; padding-bottom: 4px; }
+      .editor-inner {
+        flex-wrap: wrap;
+        align-items: stretch;
+        padding: 4px 10px 4px 12px;
+        gap: 8px;
+      }
+      .editor-inner .editor-input {
+        flex: 1 1 100%;
+        width: 100%;
+        min-width: 100%;
+      }
+      .editor-btns {
+        width: 100%;
+        justify-content: flex-end;
+        padding-bottom: 0;
+      }
       .top-btn { padding: 10px 14px; min-height: 46px; font-size: 15px; gap: 8px; border-radius: 11px; }
       .hbtn { width: 46px; height: 46px; border-radius: 12px; }
       .keybtn { padding: 10px 14px; min-width: 54px; min-height: 46px; font-size: 15px; border-radius: 11px; }
@@ -1100,13 +1139,18 @@
     }
 
     @media (hover: none) and (pointer: coarse) and (orientation: portrait) and (min-width: 741px) and (max-width: 1024px) {
-      .keybar { display: flex; gap: 10px; padding: 10px 14px; overflow-x: hidden; flex-wrap: wrap; }
+      .keybar { display: flex; gap: 8px; padding: 10px 14px; overflow-x: hidden; flex-wrap: nowrap; }
+      .keybar-top .keybtn {
+        flex: 1 1 0;
+        min-width: 0;
+        white-space: nowrap;
+        justify-content: center;
+      }
       .attach-bar { padding: 3px 14px; }
       #btn-model .sel, #btn-model .chev { display: none; }
       #btn-model span.txt { display: inline; }
       #btn-thinking span.txt, #btn-thinking .sel, #btn-thinking .chev { display: none; }
       #btn-thinking .ico { display: inline-flex; }
-      #btn-abort { display: none; }
       #btn-release, #btn-takeover, #btn-menu-header { display: inline-flex; }
     }
 

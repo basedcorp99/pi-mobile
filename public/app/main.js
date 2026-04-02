@@ -27,6 +27,7 @@ const msgs = document.getElementById("msgs");
 const input = document.getElementById("inp");
 const workingIndicator = document.getElementById("working");
 const workingSpin = document.getElementById("work-spin");
+const workingText = document.querySelector("#working .work-text");
 
 const footerLine1 = document.getElementById("footer-line-1");
 const footerLeft2 = document.getElementById("footer-left-2");
@@ -71,10 +72,14 @@ const sidebar = document.querySelector(".sidebar");
 const sidebarOverlay = document.getElementById("sidebar-overlay");
 
 const kbMenu = document.getElementById("kb-menu");
-const kbEsc = document.getElementById("kb-esc");
+const kbAbort = document.getElementById("kb-abort");
+const kbCompact = document.getElementById("kb-compact");
 const kbTakeover = document.getElementById("kb-takeover");
 const kbRelease = document.getElementById("kb-release");
 const kbEnter = document.getElementById("kb-enter");
+const kbTakeoverTextNode = kbTakeover ? Array.from(kbTakeover.childNodes).find((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim()) : null;
+const kbAbortTextNode = kbAbort ? Array.from(kbAbort.childNodes).find((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim()) : null;
+const kbCompactTextNode = kbCompact ? Array.from(kbCompact.childNodes).find((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim()) : null;
 
 const clientId = getOrCreateClientId();
 const token = getToken();
@@ -274,8 +279,22 @@ async function addImageFiles(files) {
 function updateWorkingIndicator() {
 	if (!workingIndicator) return;
 	const activeState = sessionCtrl.getActiveState();
-	const show = isPhoneLike() && (sessionCtrl.getPendingPrompt() || Boolean(activeState && activeState.isStreaming));
+	const actionBusy = sessionCtrl.getActionBusy ? sessionCtrl.getActionBusy() : null;
+	const show = sessionCtrl.getPendingPrompt() || Boolean(activeState && activeState.isStreaming) || Boolean(actionBusy);
 	workingIndicator.classList.toggle("open", show);
+	if (workingText) {
+		workingText.textContent = actionBusy === "takeover"
+			? "Taking over…"
+			: actionBusy === "reconnect"
+				? "Reconnecting…"
+				: actionBusy === "release"
+					? "Releasing…"
+					: actionBusy === "compact"
+						? "Compacting…"
+						: actionBusy === "abort"
+							? "Aborting…"
+							: "Working...";
+	}
 
 	const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 	const updateFrame = () => {
@@ -306,21 +325,25 @@ function updateControls() {
 	const canChangeSettings = hasSession && isController && !streaming && !actionBusy;
 
 	btnAbort.disabled = !hasSession || Boolean(actionBusy && actionBusy !== "abort");
-	btnTakeover.disabled = !hasSession || isController || streaming || Boolean(actionBusy);
+	btnTakeover.disabled = !hasSession || Boolean(actionBusy);
 	if (btnCompact) btnCompact.disabled = !hasSession || !isController || streaming || Boolean(actionBusy);
 	btnRelease.disabled = !hasSession || !isController || Boolean(actionBusy);
 	input.disabled = !hasSession || !isController || actionBusy === "release" || actionBusy === "compact";
 	if (btnModel) btnModel.disabled = !canChangeSettings;
 	if (btnThinking) btnThinking.disabled = !canChangeSettings;
-	if (btnTakeoverTxt) btnTakeoverTxt.textContent = actionBusy === "takeover" ? "Taking…" : "Take over";
+	if (btnTakeoverTxt) btnTakeoverTxt.textContent = actionBusy === "takeover" ? "Taking…" : actionBusy === "reconnect" ? "Reconnecting…" : isController ? "Reconnect" : "Take over";
+	if (kbTakeoverTextNode) kbTakeoverTextNode.textContent = actionBusy === "takeover" ? " Taking…" : actionBusy === "reconnect" ? " Reconnecting…" : isController ? " Reconnect" : " Take over";
 	if (btnAbortTxt) btnAbortTxt.textContent = actionBusy === "abort" ? "Aborting…" : "Abort";
+	if (kbAbortTextNode) kbAbortTextNode.textContent = actionBusy === "abort" ? " Aborting…" : " Abort";
 	if (btnCompactTxt) btnCompactTxt.textContent = actionBusy === "compact" ? "Compacting…" : "Compact";
+	if (kbCompactTextNode) kbCompactTextNode.textContent = actionBusy === "compact" ? " Compacting…" : " Compact";
 	if (btnReleaseTxt) btnReleaseTxt.textContent = actionBusy === "release" ? "Releasing…" : "Release";
 	updateAttachmentControls();
 
-	if (kbEsc) kbEsc.disabled = !hasSession || Boolean(actionBusy && actionBusy !== "abort");
-	if (kbTakeover) kbTakeover.disabled = !hasSession || isController || streaming || Boolean(actionBusy);
+	if (kbAbort) kbAbort.disabled = !hasSession || Boolean(actionBusy && actionBusy !== "abort");
+	if (kbTakeover) kbTakeover.disabled = !hasSession || Boolean(actionBusy);
 	if (kbRelease) kbRelease.disabled = !hasSession || !isController || Boolean(actionBusy);
+	if (kbCompact) kbCompact.disabled = !hasSession || !isController || streaming || Boolean(actionBusy);
 	if (kbEnter) kbEnter.disabled = !hasSession || !isController || actionBusy === "release" || actionBusy === "compact";
 
 	if (!hasSession) {
@@ -764,7 +787,10 @@ if (btnCommands) {
 
 if (kbMenu) kbMenu.addEventListener("click", () => sidebarCtrl.toggleOpen());
 if (btnMenuHeader) btnMenuHeader.addEventListener("click", () => sidebarCtrl.toggleOpen());
-if (kbEsc) kbEsc.addEventListener("click", () => handleEscapeAction());
+if (kbAbort) kbAbort.addEventListener("click", () => void sessionCtrl.abortRun());
+if (kbCompact) kbCompact.addEventListener("click", () => {
+	void sessionCtrl.compact();
+});
 if (kbTakeover) kbTakeover.addEventListener("click", () => {
 	void sessionCtrl.takeOver().catch((error) => {
 		sessionCtrl.appendNotice(error instanceof Error ? error.message : String(error), "error");
