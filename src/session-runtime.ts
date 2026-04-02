@@ -12,7 +12,7 @@ import { stat } from "node:fs/promises";
 import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type {
 	ApiCommandRequest,
 	ApiCreateSessionRequest,
@@ -1011,5 +1011,170 @@ export class PiWebRuntime {
 				// ignore broken clients
 			}
 		}
+	}
+
+	// ── Worktree management ────────────────────────────────────────
+
+	private async gitExec(cwd: string, args: string[]): Promise<{ stdout: string; exitCode: number }> {
+		const { execFile } = await import("node:child_process");
+		return new Promise((resolve) => {
+			execFile("git", args, { cwd, timeout: 15_000 }, (err, stdout) => {
+				const code = err && typeof (err as any).code === "number" ? (err as any).code : (err ? 1 : 0);
+				resolve({ stdout: (stdout || "").trim(), exitCode: code });
+			});
+		});
+	}
+
+	private async getRepoRoot(cwd: string): Promise<string | null> {
+		const { stdout, exitCode } = await this.gitExec(cwd, ["rev-parse", "--show-toplevel"]);
+		if (exitCode !== 0 || !stdout) return null;
+		const { stdout: commonDir } = await this.gitExec(stdout, ["rev-parse", "--git-common-dir"]);
+		if (commonDir && commonDir !== ".git" && !commonDir.endsWith("/.git")) {
+			const resolved = resolve(commonDir, "..");
+			if (existsSync(resolved)) return resolved;
+		}
+		return stdout;
+	}
+
+	private async getCurrentBranch(repoRoot: string): Promise<string> {
+		const { stdout } = await this.gitExec(repoRoot, ["symbolic-ref", "--short", "HEAD"]);
+		return stdout || "HEAD";
+	}
+
+	async listWorktrees(): Promise<Array<{ name: string; path: string; branch: string; repoRoot: string; repoName: string; hasChanges: boolean; aheadCount: number; isRunning: boolean }>> {
+		const repos = await this.listRepos();
+		const results: Array<{ name: string; path: string; branch: string; repoRoot: string; repoName: string; hasChanges: boolean; aheadCount: number; isRunning: boolean }> = [];
+
+		for (const repo of repos) {
+			const repoRoot = await this.getRepoRoot(repo);
+			if (!repoRoot) continue;
+			const wtDir = join(repoRoot, ".worktrees");
+			if (!existsSync(wtDir)) continue;
+
+			const { readdir } = await import("node:fs/promises");
+			let entries: string[];
+			try { entries = await readdir(wtDir); } catch { continue; }
+
+			for (const entry of entries) {
+				if (!entry.startsWith("worktree-")) continue;
+				const wtPath = join(wtDir, entry);
+				if (!existsSync(join(wtPath, ".git"))) continue;
+
+				const name = entry.replace(/^worktree-/, "");
+				const { stdout: statusOut } = await this.gitExec(wtPath, ["status", "--porcelain"]);
+				const hasChanges = Boolean(statusOut);
+
+				const baseBranch = await this.getCurrentBranch(repoRoot);
+				const { stdout: aheadStr } = await this.gitExec(wtPath, ["rev-list", "HEAD", "--not", baseBranch, "--count"]);
+				const aheadCount = parseInt(aheadStr, 10) || 0;
+
+				let isRunning = false;
+				for (const runtime of this.runningById.values()) {
+					if (runtime.cwd === wtPath) { isRunning = true; break; }
+				}
+
+				results.push({ name, path: wtPath, branch: entry, repoRoot, repoName: basename(repoRoot), hasChanges, aheadCount, isRunning });
+			}
+		}
+		return results;
+	}
+
+	async createWorktree(request: { repoPath: string; name: string; baseBranch?: string; clientId: string }): Promise<{ sessionId: string; worktreePath: string }> {
+		const repoRoot = await this.getRepoRoot(request.repoPath);
+		if (!repoRoot) throw new Error("not_a_git_repo");
+
+		const name = request.name.trim().replace(/[^a-zA-Z0-9._-]/g, "-");
+		if (!name) throw new Error("invalid_worktree_name");
+
+		const branch = `worktree-${name}`;
+		const wtDir = join(repoRoot, ".worktrees");
+		const wtPath = join(wtDir, branch);
+
+		if (existsSync(wtPath)) throw new Error("worktree_already_exists");
+
+		const { mkdirSync } = await import("node:fs");
+		mkdirSync(wtDir, { recursive: true });
+
+		const base = request.baseBranch?.trim() || "HEAD";
+		const { stdout: branchCheck } = await this.gitExec(repoRoot, ["show-ref", "--verify", `refs/heads/${branch}`]);
+		if (!branchCheck) {
+			const { exitCode } = await this.gitExec(repoRoot, ["branch", branch, base]);
+			if (exitCode !== 0) throw new Error("failed_to_create_branch");
+		}
+
+		const { exitCode: wtResult } = await this.gitExec(repoRoot, ["worktree", "add", wtPath, branch]);
+		if (wtResult !== 0 && !existsSync(join(wtPath, ".git"))) {
+			await this.gitExec(repoRoot, ["worktree", "prune"]);
+			const { exitCode: retry } = await this.gitExec(repoRoot, ["worktree", "add", wtPath, branch]);
+			if (retry !== 0 && !existsSync(join(wtPath, ".git"))) throw new Error("failed_to_create_worktree");
+		}
+
+		const result = await this.startSession({ clientId: request.clientId, cwd: wtPath });
+		return { sessionId: result.sessionId, worktreePath: wtPath };
+	}
+
+	async mergeWorktree(request: { worktreePath: string; targetBranch?: string }): Promise<{ merged: boolean; message: string }> {
+		const wtPath = request.worktreePath;
+		if (!existsSync(join(wtPath, ".git"))) throw new Error("not_a_worktree");
+
+		const repoRoot = await this.getRepoRoot(wtPath);
+		if (!repoRoot) throw new Error("cannot_resolve_repo");
+
+		const { stdout: wtBranch } = await this.gitExec(wtPath, ["symbolic-ref", "--short", "HEAD"]);
+		if (!wtBranch) throw new Error("cannot_resolve_branch");
+
+		const { stdout: statusOut } = await this.gitExec(wtPath, ["status", "--porcelain"]);
+		if (statusOut) {
+			await this.gitExec(wtPath, ["add", "-A"]);
+			await this.gitExec(wtPath, ["commit", "-m", `worktree ${wtBranch}: auto-commit before merge`]);
+		}
+
+		const target = request.targetBranch?.trim() || await this.getCurrentBranch(repoRoot);
+		const { exitCode, stdout: mergeOut } = await this.gitExec(repoRoot, ["merge", wtBranch, "--no-ff", "-m", `Merge worktree ${wtBranch} into ${target}`]);
+		if (exitCode !== 0) {
+			return { merged: false, message: `Merge conflict or failure. Resolve manually in ${repoRoot}.` };
+		}
+		return { merged: true, message: mergeOut || "Merge successful." };
+	}
+
+	async deleteWorktree(wtPath: string): Promise<void> {
+		if (!existsSync(wtPath)) return;
+		const repoRoot = await this.getRepoRoot(wtPath);
+		if (!repoRoot) return;
+
+		for (const [sessionId, runtime] of this.runningById.entries()) {
+			if (runtime.cwd === wtPath) { await this.stopSession(sessionId); break; }
+		}
+
+		const { stdout: wtBranch } = await this.gitExec(wtPath, ["symbolic-ref", "--short", "HEAD"]);
+		await this.gitExec(repoRoot, ["worktree", "remove", wtPath, "--force"]);
+		if (wtBranch) await this.gitExec(repoRoot, ["branch", "-D", wtBranch]);
+	}
+
+	async autoCleanupWorktree(wtPath: string): Promise<boolean> {
+		if (!existsSync(wtPath)) return false;
+		const { stdout: statusOut } = await this.gitExec(wtPath, ["status", "--porcelain"]);
+		if (statusOut) return false;
+		const { stdout: untrackedOut } = await this.gitExec(wtPath, ["ls-files", "--others", "--exclude-standard"]);
+		if (untrackedOut) return false;
+		const repoRoot = await this.getRepoRoot(wtPath);
+		if (!repoRoot) return false;
+		const baseBranch = await this.getCurrentBranch(repoRoot);
+		const { stdout: aheadStr } = await this.gitExec(wtPath, ["rev-list", "HEAD", "--not", baseBranch, "--count"]);
+		if ((parseInt(aheadStr, 10) || 0) > 0) return false;
+		await this.deleteWorktree(wtPath);
+		return true;
+	}
+
+	async getWorktreeBranches(repoPath: string): Promise<string[]> {
+		const repoRoot = await this.getRepoRoot(repoPath);
+		if (!repoRoot) return [];
+		const { stdout } = await this.gitExec(repoRoot, ["for-each-ref", "--format=%(refname:short)", "refs/heads/"]);
+		if (!stdout) return [];
+		return stdout.split("\n").filter(Boolean);
+	}
+
+	async isGitRepo(path: string): Promise<boolean> {
+		return (await this.getRepoRoot(path)) !== null;
 	}
 }

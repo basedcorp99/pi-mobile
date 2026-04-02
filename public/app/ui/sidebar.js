@@ -415,6 +415,26 @@ export function createSidebar({
 	}
 
 	async function startInDir(cwd) {
+		const trimmedCwd = cwd.trim();
+		try {
+			const gitCheck = await api.getJson(`/api/is-git-repo?path=${encodeURIComponent(trimmedCwd)}`);
+			if (gitCheck?.isGitRepo) {
+				void showWorktreeChoice(trimmedCwd);
+				return;
+			}
+		} catch { /* non-git, proceed normally */ }
+		try {
+			const result = await api.postJson("/api/sessions", { clientId, cwd: trimmedCwd });
+			viewMode = "sessions";
+			onSessionIdSelected(result.sessionId);
+			setOpen(false);
+		} catch (err) {
+			viewMode = "picker";
+			onNotice(err instanceof Error ? err.message : String(err), "error");
+		}
+	}
+
+	async function startNormalSession(cwd) {
 		try {
 			const result = await api.postJson("/api/sessions", { clientId, cwd: cwd.trim() });
 			viewMode = "sessions";
@@ -426,19 +446,255 @@ export function createSidebar({
 		}
 	}
 
+	function showWorktreeChoice(cwd) {
+		viewMode = "picker";
+		sessionsList.innerHTML = "";
+		if (sidebarLabel) sidebarLabel.textContent = "Session Type";
+
+		const backBtn = document.createElement("div");
+		backBtn.className = "si si-new";
+		backBtn.innerHTML = `<div class="si-name">← Back</div>`;
+		backBtn.addEventListener("click", () => void showNewSessionPicker());
+		sessionsList.appendChild(backBtn);
+
+		const info = document.createElement("div");
+		info.className = "si";
+		const infoMeta = document.createElement("div");
+		infoMeta.className = "si-meta new-session-empty";
+		infoMeta.textContent = `Git repo: ${shortPath(cwd)}`;
+		info.appendChild(infoMeta);
+		sessionsList.appendChild(info);
+
+		const normalBtn = document.createElement("div");
+		normalBtn.className = "si si-new";
+		normalBtn.innerHTML = `<div class="si-name">Normal Session</div><div class="si-meta">Open directly in the repo root</div>`;
+		normalBtn.addEventListener("click", () => void startNormalSession(cwd));
+		sessionsList.appendChild(normalBtn);
+
+		const wtBtn = document.createElement("div");
+		wtBtn.className = "si si-new";
+		wtBtn.innerHTML = `<div class="si-name">🌿 New Worktree</div><div class="si-meta">Independent branch + isolated copy</div>`;
+		wtBtn.addEventListener("click", () => void showWorktreeForm(cwd));
+		sessionsList.appendChild(wtBtn);
+	}
+
+	async function showWorktreeForm(cwd) {
+		viewMode = "picker";
+		sessionsList.innerHTML = "";
+		if (sidebarLabel) sidebarLabel.textContent = "New Worktree";
+
+		const backBtn = document.createElement("div");
+		backBtn.className = "si si-new";
+		backBtn.innerHTML = `<div class="si-name">← Back</div>`;
+		backBtn.addEventListener("click", () => void showWorktreeChoice(cwd));
+		sessionsList.appendChild(backBtn);
+
+		const form = document.createElement("div");
+		form.style.cssText = "padding:8px 12px;display:flex;flex-direction:column;gap:10px;";
+
+		const nameLabel = document.createElement("label");
+		nameLabel.className = "agent-launcher-label";
+		nameLabel.textContent = "Worktree name";
+		const nameInput = document.createElement("input");
+		nameInput.className = "sessions-search";
+		nameInput.type = "text";
+		nameInput.placeholder = "e.g. fix-auth";
+		nameInput.value = `wt-${Date.now().toString(36)}`;
+		nameLabel.appendChild(nameInput);
+		form.appendChild(nameLabel);
+
+		const branchLabel = document.createElement("label");
+		branchLabel.className = "agent-launcher-label";
+		branchLabel.textContent = "Base branch";
+		const branchSelect = document.createElement("select");
+		branchSelect.className = "sessions-search";
+		const headOption = document.createElement("option");
+		headOption.value = "HEAD";
+		headOption.textContent = "HEAD (current)";
+		branchSelect.appendChild(headOption);
+		branchLabel.appendChild(branchSelect);
+		form.appendChild(branchLabel);
+
+		// Load branches async
+		api.getJson(`/api/worktree/branches?repo=${encodeURIComponent(cwd)}`).then((data) => {
+			const branches = Array.isArray(data?.branches) ? data.branches : [];
+			for (const branch of branches) {
+				const opt = document.createElement("option");
+				opt.value = branch;
+				opt.textContent = branch;
+				branchSelect.appendChild(opt);
+			}
+		}).catch(() => {});
+
+		const createBtn = document.createElement("button");
+		createBtn.className = "new-btn";
+		createBtn.style.cssText = "background:#1e2a20;border-color:#2a3a2a;color:#b5bd68;padding:10px 14px;font-weight:600;justify-content:center;";
+		createBtn.textContent = "Create Worktree";
+		createBtn.addEventListener("click", async () => {
+			const name = nameInput.value.trim();
+			if (!name) { onNotice("Name cannot be empty", "error"); return; }
+			createBtn.disabled = true;
+			createBtn.textContent = "Creating…";
+			try {
+				const result = await api.postJson("/api/worktree/create", {
+					repoPath: cwd,
+					name,
+					baseBranch: branchSelect.value === "HEAD" ? undefined : branchSelect.value,
+					clientId,
+				});
+				viewMode = "sessions";
+				onSessionIdSelected(result.sessionId);
+				setOpen(false);
+			} catch (err) {
+				createBtn.disabled = false;
+				createBtn.textContent = "Create Worktree";
+				onNotice(err instanceof Error ? err.message : String(err), "error");
+			}
+		});
+		form.appendChild(createBtn);
+
+		nameInput.addEventListener("keydown", (e) => {
+			if (e.key === "Enter") { e.preventDefault(); createBtn.click(); }
+		});
+
+		sessionsList.appendChild(form);
+		setTimeout(() => {
+			nameInput.focus();
+			nameInput.select();
+		}, 0);
+	}
+
+	function renderWorktreeSection(worktrees) {
+		if (!Array.isArray(worktrees) || worktrees.length === 0) return;
+
+		const sectionHdr = document.createElement("div");
+		sectionHdr.className = "sidebar-wt-section-hdr";
+		sectionHdr.textContent = "Worktrees";
+		sessionsList.appendChild(sectionHdr);
+
+		// Group by repoName
+		const byRepo = new Map();
+		for (const wt of worktrees) {
+			const key = wt.repoRoot || wt.repoName;
+			if (!byRepo.has(key)) byRepo.set(key, { repoName: wt.repoName, repoRoot: wt.repoRoot, items: [] });
+			byRepo.get(key).items.push(wt);
+		}
+
+		for (const [, group] of byRepo) {
+			const repoHdr = document.createElement("div");
+			repoHdr.className = "sidebar-wt-repo-hdr";
+			repoHdr.textContent = group.repoName;
+			sessionsList.appendChild(repoHdr);
+
+			for (const wt of group.items) {
+				const row = document.createElement("div");
+				row.className = "si si-wt";
+
+				const name = document.createElement("div");
+				name.className = "si-name";
+				name.textContent = `\ud83c\udf3f ${wt.name}`;
+				name.title = wt.path;
+
+				const meta = document.createElement("div");
+				meta.className = "si-meta";
+				const parts = [];
+				if (wt.aheadCount > 0) parts.push(`${wt.aheadCount} commit${wt.aheadCount > 1 ? "s" : ""} ahead`);
+				if (wt.hasChanges) parts.push("uncommitted changes");
+				if (wt.isRunning) parts.push(`<span class="si-run">running</span>`);
+				if (parts.length === 0) parts.push("clean");
+				meta.innerHTML = parts.join(" \u00b7 ");
+
+				row.appendChild(name);
+				row.appendChild(meta);
+
+				// Merge button
+				const mergeBtn = document.createElement("button");
+				mergeBtn.className = "si-rename";
+				mergeBtn.type = "button";
+				mergeBtn.textContent = "\u2934";
+				mergeBtn.title = "Merge into main branch";
+				mergeBtn.style.right = "74px";
+				mergeBtn.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); });
+				mergeBtn.addEventListener("click", async (e) => {
+					e.stopPropagation();
+					if (!window.confirm(`Merge worktree "${wt.name}" into main branch?`)) return;
+					try {
+						const result = await api.postJson("/api/worktree/merge", { worktreePath: wt.path });
+						onNotice(result.merged ? `Merged: ${result.message}` : `Failed: ${result.message}`, result.merged ? "info" : "error");
+						void refresh({ force: true });
+					} catch (err) {
+						onNotice(err instanceof Error ? err.message : String(err), "error");
+					}
+				});
+				row.appendChild(mergeBtn);
+
+				// Open button
+				const openBtn = document.createElement("button");
+				openBtn.className = "si-rename";
+				openBtn.type = "button";
+				openBtn.textContent = "\u25b6";
+				openBtn.title = "Open session in this worktree";
+				openBtn.style.right = "40px";
+				openBtn.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); });
+				openBtn.addEventListener("click", async (e) => {
+					e.stopPropagation();
+					try {
+						const result = await api.postJson("/api/sessions", { clientId, cwd: wt.path });
+						onSessionIdSelected(result.sessionId);
+						setOpen(false);
+					} catch (err) {
+						onNotice(err instanceof Error ? err.message : String(err), "error");
+					}
+				});
+				row.appendChild(openBtn);
+
+				// Delete button
+				const del = document.createElement("button");
+				del.className = "si-del";
+				del.type = "button";
+				del.textContent = "\u2715";
+				del.title = "Delete worktree";
+				del.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); });
+				del.addEventListener("click", async (e) => {
+					e.stopPropagation();
+					if (!window.confirm(`Delete worktree "${wt.name}"? This removes the branch and all uncommitted changes.`)) return;
+					try {
+						await fetch(`/api/worktree?path=${encodeURIComponent(wt.path)}`, { method: "DELETE", headers: api.headers() });
+						void refresh({ force: true });
+					} catch (err) {
+						onNotice(err instanceof Error ? err.message : String(err), "error");
+					}
+				});
+				row.appendChild(del);
+
+				row.addEventListener("click", async () => {
+					try {
+						const result = await api.postJson("/api/sessions", { clientId, cwd: wt.path });
+						onSessionIdSelected(result.sessionId);
+						setOpen(false);
+					} catch (err) {
+						onNotice(err instanceof Error ? err.message : String(err), "error");
+					}
+				});
+
+				sessionsList.appendChild(row);
+			}
+		}
+	}
+
 	async function refresh(options = {}) {
 		if (viewMode === "picker" && !options.force) return;
 		viewMode = "sessions";
 		if (sidebarLabel) sidebarLabel.textContent = "Sessions";
 		try {
-			// Show all sessions: active first, then recent saved
-			const activeData = await api.getJson("/api/active-sessions");
+			const [activeData, allData, wtData] = await Promise.all([
+				api.getJson("/api/active-sessions"),
+				api.getJson("/api/sessions"),
+				api.getJson("/api/worktrees").catch(() => ({ worktrees: [] })),
+			]);
 			const active = Array.isArray(activeData.sessions) ? activeData.sessions : [];
-
-			const allData = await api.getJson("/api/sessions");
 			const all = Array.isArray(allData.sessions) ? allData.sessions : [];
 
-			// Merge: active sessions first, then saved (deduplicated)
 			const seen = new Set();
 			const merged = [];
 			for (const s of active) {
@@ -452,10 +708,12 @@ export function createSidebar({
 				merged.push(s);
 			}
 
-			// Sort by modified descending
 			merged.sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified));
 
 			renderSessionList(merged.slice(0, 50));
+
+			const worktrees = Array.isArray(wtData?.worktrees) ? wtData.worktrees : [];
+			renderWorktreeSection(worktrees);
 		} catch (error) {
 			consecutiveRefreshFailures += 1;
 			if (lastRenderedSessions.length > 0 && consecutiveRefreshFailures < 3) {

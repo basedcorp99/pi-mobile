@@ -556,6 +556,81 @@ Bun.serve({
                         }
                 }
 
+		// ── Worktree API ───────────────────────────────────────
+		if (req.method === "GET" && url.pathname === "/api/worktrees") {
+			try {
+				const worktrees = await runtime.listWorktrees();
+				return json({ worktrees }, 200);
+			} catch (error) {
+				return errorResponse(error instanceof Error ? error.message : String(error), 500);
+			}
+		}
+
+		if (req.method === "POST" && url.pathname === "/api/worktree/create") {
+			const raw = (await requireJsonBody(req)) as { repoPath?: string; name?: string; baseBranch?: string; clientId?: string };
+			if (!raw?.repoPath || typeof raw.repoPath !== "string") return errorResponse("Missing repoPath", 400);
+			if (!raw?.name || typeof raw.name !== "string") return errorResponse("Missing name", 400);
+			if (!raw?.clientId || typeof raw.clientId !== "string") return errorResponse("Missing clientId", 400);
+			try {
+				const result = await runtime.createWorktree({
+					repoPath: raw.repoPath,
+					name: raw.name,
+					baseBranch: typeof raw.baseBranch === "string" ? raw.baseBranch : undefined,
+					clientId: raw.clientId,
+				});
+				return json(result, 200);
+			} catch (error) {
+				return errorResponse(error instanceof Error ? error.message : String(error), 400);
+			}
+		}
+
+		if (req.method === "POST" && url.pathname === "/api/worktree/merge") {
+			const raw = (await requireJsonBody(req)) as { worktreePath?: string; targetBranch?: string };
+			if (!raw?.worktreePath || typeof raw.worktreePath !== "string") return errorResponse("Missing worktreePath", 400);
+			try {
+				const result = await runtime.mergeWorktree({
+					worktreePath: raw.worktreePath,
+					targetBranch: typeof raw.targetBranch === "string" ? raw.targetBranch : undefined,
+				});
+				return json(result, 200);
+			} catch (error) {
+				return errorResponse(error instanceof Error ? error.message : String(error), 400);
+			}
+		}
+
+		if (req.method === "DELETE" && url.pathname === "/api/worktree") {
+			const path = url.searchParams.get("path");
+			if (!path) return errorResponse("Missing path query param", 400);
+			try {
+				await runtime.deleteWorktree(path);
+				return ok();
+			} catch (error) {
+				return errorResponse(error instanceof Error ? error.message : String(error), 400);
+			}
+		}
+
+		if (req.method === "GET" && url.pathname === "/api/worktree/branches") {
+			const repoPath = url.searchParams.get("repo") || "";
+			if (!repoPath) return errorResponse("Missing repo query param", 400);
+			try {
+				const branches = await runtime.getWorktreeBranches(repoPath);
+				return json({ branches }, 200);
+			} catch (error) {
+				return errorResponse(error instanceof Error ? error.message : String(error), 500);
+			}
+		}
+
+		if (req.method === "GET" && url.pathname === "/api/is-git-repo") {
+			const path = url.searchParams.get("path") || "";
+			if (!path) return json({ isGitRepo: false }, 200);
+			try {
+				const isGit = await runtime.isGitRepo(path);
+				return json({ isGitRepo: isGit }, 200);
+			} catch {
+				return json({ isGitRepo: false }, 200);
+			}
+		}
+
 		if (req.method === "POST" && url.pathname === "/api/sessions") {
 			const raw = (await requireJsonBody(req)) as ApiCreateSessionRequest;
 			try {

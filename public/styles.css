@@ -550,6 +550,22 @@
     .si-new { border: 1px dashed rgba(128, 128, 128, 0.22); }
     .si-new .si-name { color: #8abeb7; }
     .si-new:hover { border-color: #8abeb7; background: #1a2a2a; }
+    .si-wt { padding-right: 112px; }
+    .sidebar-wt-section-hdr {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: #505050;
+      padding: 14px 8px 4px;
+      border-top: 1px solid rgba(42, 42, 50, 0.45);
+      margin-top: 8px;
+    }
+    .sidebar-wt-repo-hdr {
+      font-size: 11px;
+      font-weight: 600;
+      color: #8abeb7;
+      padding: 6px 8px 2px;
+    }
 
     /* ── Chat area ─────────────────────────────────────────── */
     .chat {
@@ -1243,6 +1259,8 @@
     body.light .si.active .si-name { color: #2a7a3a; }
     body.light .si-meta { color: #888; }
     body.light .si-run { color: #2a7a3a; }
+    body.light .sidebar-wt-section-hdr { color: #888; border-top-color: #d0d0ca; }
+    body.light .sidebar-wt-repo-hdr { color: #2a7a6a; }
     body.light .si-rename,
     body.light .si-del { border-color:#c0c0ba; color:#888; }
     body.light .si-rename:hover { color:#2a7a6a; border-color:#2a7a6a; }
