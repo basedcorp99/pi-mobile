@@ -1007,6 +1007,10 @@
       .working.open { display: flex; }
       .working { font-size: 16px; }
       .keybar { display: flex; gap: 4px; padding: 6px 8px; overflow-x: hidden; flex-wrap: nowrap; }
+      .sidebar {
+        box-shadow: none;
+        border-top: none;
+      }
       .keybar-top { gap: 4px; }
       .keybar-top .keybtn {
         flex: 1 1 0;
@@ -1139,6 +1143,7 @@
     }
 
     @media (hover: none) and (pointer: coarse) and (orientation: portrait) and (min-width: 741px) and (max-width: 1024px) {
+      .sidebar { box-shadow: none; }
       .keybar { display: flex; gap: 8px; padding: 10px 14px; overflow-x: hidden; flex-wrap: nowrap; }
       .keybar-top .keybtn {
         flex: 1 1 0;
@@ -1164,7 +1169,7 @@
         z-index: 30;
         transform: translateX(-105%);
         transition: transform .12s ease;
-        box-shadow: 0 0 0 1px #2a2a32, 0 18px 48px rgba(0,0,0,.28);
+        box-shadow: none;
       }
       .sidebar.open { transform: translateX(0); }
       .sidebar-overlay {
@@ -1177,6 +1182,26 @@
         z-index: 25;
       }
       .sidebar-overlay.open { display: block; }
+    }
+
+    @media (hover: hover) and (pointer: fine) and (min-width: 1025px) {
+      .sidebar {
+        position: relative;
+        top: auto;
+        bottom: auto;
+        left: auto;
+        width: min(280px, 20vw);
+        max-width: 320px;
+        flex: 0 0 min(280px, 20vw);
+        transform: none;
+        transition: none;
+        box-shadow: none;
+        z-index: 1;
+      }
+      .sidebar.open { transform: none; }
+      .sidebar-overlay { display: none !important; }
+      #btn-menu-header,
+      #kb-menu { display: none !important; }
     }
 
     /* ── Light mode ──────────────────────────────────────── */
