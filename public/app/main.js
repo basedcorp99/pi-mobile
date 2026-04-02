@@ -439,7 +439,10 @@ const sessionCtrl = createSessionController({
 		updateFooter();
 		updateControls();
 	},
-	onCloseMenu: () => menuCtrl?.close(),
+	onCloseMenu: () => {
+		if (menuOverlay?.dataset?.locked === "1") return;
+		menuCtrl?.close();
+	},
 	onSidebarClose: () => sidebarCtrl?.setOpen(false),
 	onSidebarRefresh: () => sidebarCtrl?.refresh(),
 	onAskRequest: (askId, questions) => {

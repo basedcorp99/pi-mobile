@@ -209,7 +209,6 @@ export function createSessionController({
 		if (!event || typeof event.type !== "string") return;
 
 		if (event.type === "init") {
-			onCloseMenu();
 			const previousState = activeState;
 			const isReconnectInit = Boolean(
 				previousState
@@ -228,6 +227,7 @@ export function createSessionController({
 			if (isReconnectInit) {
 				chatView.syncFromMessages(activeState.messages || []);
 			} else {
+				onCloseMenu();
 				chatView.clear();
 				chatView.renderHistory(activeState.messages || []);
 			}
