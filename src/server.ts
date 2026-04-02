@@ -269,7 +269,6 @@ function requireJsonBody(req: Request): Promise<Record<string, unknown>> {
 	return req.json().catch(() => ({}));
 }
 
-// ── Directory search infrastructure ────────────────────────────────
 const DIRECTORY_SEARCH_LIMIT = 20;
 const DIRECTORY_SEARCH_CACHE_TTL_MS = 60_000;
 const DIRECTORY_SEARCH_ROOTS = ["/root", "/home"];
@@ -287,94 +286,103 @@ function hasExecutable(path: string | null | undefined): path is string {
 	return Boolean(path && existsSync(path));
 }
 
-function isSearchableDirectory(path: string): boolean {
-	const normalized = path.trim();
-	if (!normalized) return false;
-	const skip = ["/.git", "/node_modules", "/dist", "/build", "/coverage", "/.next", "/.turbo", "/target", "/.cache", "/.bun/install/cache", "/.pi/agent/sessions"];
-	for (const seg of skip) {
-		if (normalized.includes(seg + "/") || normalized.endsWith(seg)) return false;
-	}
-	return true;
-}
-
 function parseSearchLines(stdout: string): string[] {
 	return stdout
 		.split("\n")
 		.map((line) => line.trim())
 		.filter(Boolean)
+		.filter((line) => existsSync(line))
 		.filter((line) => isSearchableDirectory(line));
 }
 
-function splitSearchTokens(input: string): string[] {
-	return input.toLowerCase().split(/[\s/_-]+/).map((t) => t.trim()).filter(Boolean);
+function isSearchableDirectory(path: string): boolean {
+	const normalized = path.trim();
+	if (!normalized) return false;
+	if (normalized.includes("/.git/") || normalized.endsWith("/.git")) return false;
+	if (normalized.includes("/node_modules/") || normalized.endsWith("/node_modules")) return false;
+	if (normalized.includes("/dist/") || normalized.endsWith("/dist")) return false;
+	if (normalized.includes("/build/") || normalized.endsWith("/build")) return false;
+	if (normalized.includes("/coverage/") || normalized.endsWith("/coverage")) return false;
+	if (normalized.includes("/.next/") || normalized.endsWith("/.next")) return false;
+	if (normalized.includes("/.turbo/") || normalized.endsWith("/.turbo")) return false;
+	if (normalized.includes("/target/") || normalized.endsWith("/target")) return false;
+	if (normalized.includes("/.cache/") || normalized.endsWith("/.cache")) return false;
+	if (normalized.includes("/.bun/install/cache/") || normalized.endsWith("/.bun/install/cache")) return false;
+	if (normalized.includes("/.pi/agent/sessions/") || normalized.endsWith("/.pi/agent/sessions")) return false;
+	return true;
 }
 
-function compactText(input: string): string {
+function splitSearchTokens(input: string): string[] {
+	return input.toLowerCase().split(/[\s/_-]+/).map((token) => token.trim()).filter(Boolean);
+}
+
+function compactSearchText(input: string): string {
 	return input.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
 function isSubsequence(needle: string, haystack: string): boolean {
 	if (!needle) return true;
-	let idx = 0;
+	let index = 0;
 	for (const ch of haystack) {
-		if (ch === needle[idx]) idx += 1;
-		if (idx >= needle.length) return true;
+		if (ch === needle[index]) index += 1;
+		if (index >= needle.length) return true;
 	}
 	return false;
 }
 
 function scoreDirectoryMatch(path: string, query: string): number {
-	const lp = path.toLowerCase();
-	const parts = lp.split("/").filter(Boolean);
-	const base = parts[parts.length - 1] || lp;
-	const q = query.trim().toLowerCase();
-	const tokens = splitSearchTokens(q);
-	const cq = compactText(q);
-	const cb = compactText(base);
-	const cp = compactText(lp);
+	const lowerPath = path.toLowerCase();
+	const parts = lowerPath.split("/").filter(Boolean);
+	const baseName = parts[parts.length - 1] || lowerPath;
+	const queryLower = query.trim().toLowerCase();
+	const tokens = splitSearchTokens(queryLower);
+	const compactQuery = compactSearchText(queryLower);
+	const compactBase = compactSearchText(baseName);
+	const compactPath = compactSearchText(lowerPath);
 	let score = 0;
 
-	if (base === q || (cq && cb === cq)) score += 2_000;
-	if (base.startsWith(q) || (cq && cb.startsWith(cq))) score += 1_200;
-	if (base.includes(q) || (cq && cb.includes(cq))) score += 900;
-	if (lp.includes(q)) score += 500;
-	if (tokens.length > 0 && tokens.every((t) => base.includes(t))) score += 700;
-	if (tokens.length > 0 && tokens.every((t) => lp.includes(t))) score += 400;
-	if (cq && isSubsequence(cq, cb)) score += 280;
-	if (cq && isSubsequence(cq, cp)) score += 140;
+	if (baseName === queryLower || (compactQuery && compactBase === compactQuery)) score += 2_000;
+	if (baseName.startsWith(queryLower) || (compactQuery && compactBase.startsWith(compactQuery))) score += 1_200;
+	if (baseName.includes(queryLower) || (compactQuery && compactBase.includes(compactQuery))) score += 900;
+	if (lowerPath.includes(queryLower)) score += 500;
+	if (tokens.length > 0 && tokens.every((token) => baseName.includes(token))) score += 700;
+	if (tokens.length > 0 && tokens.every((token) => lowerPath.includes(token))) score += 400;
+	if (compactQuery && isSubsequence(compactQuery, compactBase)) score += 280;
+	if (compactQuery && isSubsequence(compactQuery, compactPath)) score += 140;
 
+	const depth = parts.length;
 	// Heavily penalize deep subdirectories — users want project roots
-	score -= parts.length * 30;
-	// Bonus for top-level project dirs (e.g. /root/foo)
-	if (parts.length <= 2) score += 200;
-	else if (parts.length <= 3) score += 80;
-	// Worktrees are useful to show at similar level to their parent
-	if (lp.includes("/.worktrees/worktree-")) {
-		const wtDepth = lp.split("/.worktrees/worktree-")[1];
-		if (wtDepth && !wtDepth.includes("/")) score += 150; // worktree root, not subfolder
+	score -= depth * 30;
+	if (depth <= 2) score += 200;
+	else if (depth <= 3) score += 80;
+	if (lowerPath.includes("/.worktrees/worktree-")) {
+		const wtDepth = lowerPath.split("/.worktrees/worktree-")[1];
+		if (wtDepth && !wtDepth.includes("/")) score += 150;
 	}
-	if (lp.startsWith("/root/")) score += 10;
+	if (lowerPath.startsWith("/root/")) score += 10;
 	return score;
 }
 
 function uniqueDirs(paths: string[]): string[] {
 	const seen = new Set<string>();
 	const result: string[] = [];
-	for (const p of paths) {
-		const n = p.trim();
-		if (!n || seen.has(n) || !isSearchableDirectory(n)) continue;
-		seen.add(n);
-		result.push(n);
+	for (const candidate of paths) {
+		const normalized = candidate.trim();
+		if (!normalized || seen.has(normalized) || !isSearchableDirectory(normalized)) continue;
+		seen.add(normalized);
+		result.push(normalized);
 	}
 	return result;
 }
 
 function buildDirectoryIndex(): Promise<string[]> {
-	const roots = DIRECTORY_SEARCH_ROOTS.filter((r) => existsSync(r));
+	const roots = DIRECTORY_SEARCH_ROOTS.filter((root) => existsSync(root));
 	if (roots.length === 0) return Promise.resolve([]);
 
-	const rootsArg = roots.map((r) => JSON.stringify(r)).join(" ");
-	const cmd = `find ${rootsArg} \\( -name .git -o -name node_modules -o -name dist -o -name build -o -name coverage -o -name .next -o -name .turbo -o -name target -o -name .cache \\) -prune -o -type d -print 2>/dev/null`;
+	const rootsArg = roots.map((root) => JSON.stringify(root)).join(" ");
+	const cmd = `find ${rootsArg} \\
+		\\( -name .git -o -name node_modules -o -name dist -o -name build -o -name coverage -o -name .next -o -name .turbo -o -name target -o -name .cache \\) -prune \\
+		-o -type d -print 2>/dev/null`;
 
 	return new Promise((resolve, reject) => {
 		execFile("bash", ["-lc", cmd], { timeout: 15_000, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
@@ -430,14 +438,15 @@ function queryFzfDirs(query: string, dirs: string[]): Promise<string[]> {
 			: null;
 	if (!fzfBin || dirs.length === 0) return Promise.resolve([]);
 
-	return new Promise((resolve) => {
+	return new Promise((resolve, reject) => {
 		const child = spawn(fzfBin, ["--filter", query], { stdio: ["pipe", "pipe", "pipe"] });
 		let stdout = "";
+		let stderr = "";
 		let settled = false;
 		const timeout = setTimeout(() => {
 			settled = true;
 			child.kill("SIGKILL");
-			resolve([]);
+			reject(new Error("Search timed out"));
 		}, 2_500);
 
 		child.on("error", () => {
@@ -446,11 +455,21 @@ function queryFzfDirs(query: string, dirs: string[]): Promise<string[]> {
 			clearTimeout(timeout);
 			resolve([]);
 		});
-		child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-		child.on("close", () => {
+		child.stdout.on("data", (chunk) => {
+			stdout += chunk.toString();
+		});
+		child.stderr.on("data", (chunk) => {
+			stderr += chunk.toString();
+		});
+		child.on("close", (code) => {
 			if (settled) return;
 			settled = true;
 			clearTimeout(timeout);
+			if (code !== 0 && code !== 1) {
+				console.warn(`[dirs/search] fzf exited with code ${String(code)}${stderr ? `: ${stderr.trim()}` : ""}`);
+				resolve([]);
+				return;
+			}
 			resolve(uniqueDirs(parseSearchLines(stdout)));
 		});
 		child.stdin.end(`${dirs.join("\n")}\n`);
@@ -460,10 +479,10 @@ function queryFzfDirs(query: string, dirs: string[]): Promise<string[]> {
 function rankDirectoryMatches(query: string, dirs: string[]): string[] {
 	return uniqueDirs(dirs)
 		.map((path) => ({ path, score: scoreDirectoryMatch(path, query) }))
-		.filter((e) => e.score > 0)
+		.filter((entry) => entry.score > 0)
 		.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
 		.slice(0, DIRECTORY_SEARCH_LIMIT)
-		.map((e) => e.path);
+		.map((entry) => entry.path);
 }
 
 async function fuzzyFindDirs(query: string): Promise<string[]> {
@@ -473,8 +492,8 @@ async function fuzzyFindDirs(query: string): Promise<string[]> {
 	const dirs = await getDirectoryIndex();
 	const rankedFallback = rankDirectoryMatches(trimmed, dirs);
 	const [zoxideResults, fzfResults] = await Promise.all([
-		queryZoxideDirs(trimmed).catch(() => [] as string[]),
-		queryFzfDirs(trimmed, dirs).catch(() => [] as string[]),
+		queryZoxideDirs(trimmed).catch(() => []),
+		queryFzfDirs(trimmed, dirs).catch(() => []),
 	]);
 
 	const zoxideSet = new Set(zoxideResults);
@@ -486,7 +505,7 @@ async function fuzzyFindDirs(query: string): Promise<string[]> {
 		}))
 		.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
 		.slice(0, DIRECTORY_SEARCH_LIMIT)
-		.map((e) => e.path);
+		.map((entry) => entry.path);
 }
 
 function isApiPath(pathname: string): boolean {
