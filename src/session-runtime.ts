@@ -1,8 +1,11 @@
 import {
 	AuthStorage,
 	createAgentSession,
+	DefaultResourceLoader,
+	getAgentDir,
 	ModelRegistry,
 	SessionManager,
+	SettingsManager,
 	type AgentSession,
 	type AgentSessionEvent,
 } from "@mariozechner/pi-coding-agent";
@@ -24,6 +27,72 @@ import type {
 	ApiSessionPatch,
 	SseEvent,
 } from "./types.ts";
+
+// ---------------------------------------------------------------------------
+// Worktree isolation guardrails
+// ---------------------------------------------------------------------------
+
+const WORKTREE_CWD_RE = /\/\.worktrees\/worktree-([^/]+)$/;
+
+function parseWorktreeInfo(cwd: string): { name: string; branch: string; repoRoot: string } | null {
+	const match = cwd.match(WORKTREE_CWD_RE);
+	if (!match) return null;
+	const name = match[1];
+	const branch = `worktree-${name}`;
+	const repoRoot = cwd.replace(/\/\.worktrees\/worktree-[^/]+$/, "");
+	return { name, branch, repoRoot };
+}
+
+const WORKTREE_GUARDRAILS = `
+## ⚠️ Worktree isolation rules
+
+You are running inside a **git worktree**, an isolated branch meant for a single task.
+
+### Hard constraints
+
+1. **Stay on your branch.** Do NOT checkout, merge into, push to, or modify \`main\` or any other branch. Commit only to your current worktree branch. Only touch other branches if the user explicitly asks you to.
+2. **Stay in your directory.** Do NOT read, write, or execute anything outside this worktree's directory tree. Other worktrees under \`.worktrees/\` are off-limits. Only access other worktrees if the user explicitly asks you to.
+3. **No live-service operations.** Do NOT run \`systemctl restart\`, \`systemctl stop\`, \`systemctl start\`, or any command that affects running services, databases, reverse proxies, or DNS. Do NOT deploy, publish, or push to production. Only perform service operations if the user explicitly asks you to.
+4. **No destructive git operations.** Do NOT \`git push\`, \`git push --force\`, \`git branch -D\`, or \`git worktree remove\` on anything. Only perform these if the user explicitly asks you to.
+
+If the user explicitly asks you to do any of the above, comply — but reconfirm first with a brief warning that it affects resources outside this worktree.
+
+When your work is done, just commit to your branch. Merging into main is handled externally.
+`.trim();
+
+function buildWorktreeResourceLoader(cwd: string): DefaultResourceLoader | null {
+	const info = parseWorktreeInfo(cwd);
+	if (!info) return null;
+
+	const agentDir = getAgentDir();
+	const settingsManager = SettingsManager.create(cwd, agentDir);
+	const loader = new DefaultResourceLoader({
+		cwd,
+		agentDir,
+		settingsManager,
+		appendSystemPromptOverride: (base: string[]) => [
+			...base,
+			`You are on branch \`${info.branch}\` in worktree \`${info.name}\` (repo root: \`${info.repoRoot}\`).\n\n${WORKTREE_GUARDRAILS}`,
+		],
+	});
+	return loader;
+}
+
+async function createSessionWithWorktreeGuard(opts: {
+	cwd: string;
+	sessionManager: InstanceType<typeof SessionManager>;
+	authStorage: AuthStorage;
+	modelRegistry: ModelRegistry;
+}) {
+	const loader = buildWorktreeResourceLoader(opts.cwd);
+	if (loader) await loader.reload();
+	return createAgentSession({
+		...opts,
+		...(loader ? { resourceLoader: loader } : {}),
+	});
+}
+
+// ---------------------------------------------------------------------------
 
 export interface SessionClient {
 	clientId: string;
@@ -675,7 +744,7 @@ export class PiWebRuntime {
 
 			const sessionManager = SessionManager.open(path);
 			const cwd = sessionManager.getCwd();
-			const { session } = await createAgentSession({
+			const { session } = await createSessionWithWorktreeGuard({
 				cwd,
 				sessionManager,
 				authStorage: this.authStorage,
@@ -702,7 +771,7 @@ export class PiWebRuntime {
 		}
 
 		const sessionManager = SessionManager.create(cwd);
-		const { session } = await createAgentSession({
+		const { session } = await createSessionWithWorktreeGuard({
 			cwd,
 			sessionManager,
 			authStorage: this.authStorage,
