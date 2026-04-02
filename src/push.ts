@@ -25,7 +25,7 @@ export interface PushNotificationPayload {
 	tag?: string;
 }
 
-const DEFAULT_SUBJECT = "mailto:root@localhost";
+export const DEFAULT_PUSH_SUBJECT = "mailto:root@localhost";
 
 function safeParse<T>(raw: string | null): T | null {
 	if (!raw) return null;
@@ -34,6 +34,44 @@ function safeParse<T>(raw: string | null): T | null {
 	} catch {
 		return null;
 	}
+}
+
+function isLoopbackHost(host: string | null | undefined): boolean {
+	const normalized = (host || "").trim().toLowerCase();
+	if (!normalized) return false;
+	return (
+		normalized === "localhost" ||
+		normalized === "localhost.localdomain" ||
+		normalized === "::1" ||
+		normalized === "[::1]" ||
+		normalized.startsWith("127.")
+	);
+}
+
+function subjectNeedsUpgrade(subject: string | null | undefined): boolean {
+	const normalized = typeof subject === "string" ? subject.trim() : "";
+	if (!normalized) return true;
+	try {
+		const parsed = new URL(normalized);
+		if (parsed.protocol === "mailto:") {
+			const mailbox = decodeURIComponent(parsed.pathname || "");
+			const atIndex = mailbox.lastIndexOf("@");
+			const domain = atIndex >= 0 ? mailbox.slice(atIndex + 1) : "";
+			return isLoopbackHost(domain);
+		}
+		return isLoopbackHost(parsed.hostname);
+	} catch {
+		return true;
+	}
+}
+
+export function resolvePushSubject(currentSubject: string | null | undefined, preferredSubject: string | null | undefined): string {
+	const current = typeof currentSubject === "string" ? currentSubject.trim() : "";
+	const preferred = typeof preferredSubject === "string" ? preferredSubject.trim() : "";
+	if (preferred && subjectNeedsUpgrade(current)) return preferred;
+	if (current) return current;
+	if (preferred) return preferred;
+	return DEFAULT_PUSH_SUBJECT;
 }
 
 function normalizeSubscription(sub: unknown): PushSubscriptionJSON | null {
@@ -64,9 +102,13 @@ export class PushService {
 		this.storePath = storePath;
 	}
 
-	async init(): Promise<void> {
-		this.data = await this.load();
+	async init(preferredSubject?: string | null): Promise<void> {
+		const { data, changed } = await this.load(preferredSubject);
+		this.data = data;
 		webpush.setVapidDetails(this.data.vapid.subject, this.data.vapid.publicKey, this.data.vapid.privateKey);
+		if (changed) {
+			await this.save();
+		}
 	}
 
 	getPublicKey(): string {
@@ -141,21 +183,29 @@ export class PushService {
 		return { ok: true, sent, failed };
 	}
 
-	private async load(): Promise<StoredPushData> {
+	private async load(preferredSubject?: string | null): Promise<{ data: StoredPushData; changed: boolean }> {
 		try {
 			const raw = await readFile(this.storePath, "utf8");
 			const parsed = safeParse<StoredPushData>(raw);
-			if (parsed && parsed.version === 1 && parsed.vapid?.publicKey && parsed.vapid?.privateKey && parsed.vapid?.subject) {
+			if (parsed && parsed.version === 1 && parsed.vapid?.publicKey && parsed.vapid?.privateKey) {
+				const subject = resolvePushSubject(parsed.vapid.subject, preferredSubject);
 				return {
-					version: 1,
-					vapid: parsed.vapid,
-					subscriptions: Array.isArray(parsed.subscriptions)
-						? parsed.subscriptions.map((sub) => normalizeSubscription(sub)).filter((sub): sub is PushSubscriptionJSON => Boolean(sub)).map((sub) => ({
-							...sub,
-							createdAt: new Date().toISOString(),
-							updatedAt: new Date().toISOString(),
-						}))
-						: [],
+					data: {
+						version: 1,
+						vapid: {
+							publicKey: parsed.vapid.publicKey,
+							privateKey: parsed.vapid.privateKey,
+							subject,
+						},
+						subscriptions: Array.isArray(parsed.subscriptions)
+							? parsed.subscriptions.map((sub) => normalizeSubscription(sub)).filter((sub): sub is PushSubscriptionJSON => Boolean(sub)).map((sub) => ({
+								...sub,
+								createdAt: new Date().toISOString(),
+								updatedAt: new Date().toISOString(),
+							}))
+							: [],
+					},
+					changed: subject !== parsed.vapid.subject,
 				};
 			}
 		} catch {
@@ -164,13 +214,16 @@ export class PushService {
 
 		const vapid = webpush.generateVAPIDKeys();
 		return {
-			version: 1,
-			vapid: {
-				publicKey: vapid.publicKey,
-				privateKey: vapid.privateKey,
-				subject: DEFAULT_SUBJECT,
+			data: {
+				version: 1,
+				vapid: {
+					publicKey: vapid.publicKey,
+					privateKey: vapid.privateKey,
+					subject: resolvePushSubject(null, preferredSubject),
+				},
+				subscriptions: [],
 			},
-			subscriptions: [],
+			changed: false,
 		};
 	}
 

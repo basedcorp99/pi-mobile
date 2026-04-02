@@ -1,7 +1,7 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { execFile, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomUUID, X509Certificate } from "node:crypto";
 import { PiWebRuntime, type SessionClient } from "./session-runtime.ts";
 import { FaceIdService } from "./faceid.ts";
 import { PushService } from "./push.ts";
@@ -90,6 +90,7 @@ Env:
   PI_WEB_HOST
   PI_WEB_PORT
   PI_WEB_TOKEN
+  PI_WEB_PUSH_SUBJECT
 `);
 			process.exit(0);
 		}
@@ -131,6 +132,38 @@ function isLoopbackHost(host: string): boolean {
 		return true;
 	}
 	return normalized.startsWith("127.");
+}
+
+function formatSubjectHost(host: string): string {
+	const normalized = stripBrackets(host).trim().split("%")[0] || "";
+	if (!normalized) return "";
+	return normalized.includes(":") ? `[${normalized}]` : normalized;
+}
+
+function getTlsSubjectHost(certFile: string | null | undefined): string | null {
+	if (!certFile || !existsSync(certFile)) return null;
+	try {
+		const cert = new X509Certificate(readFileSync(certFile, "utf8"));
+		const sanEntries = (cert.subjectAltName || "").split(/,\s*/).map((entry) => entry.trim()).filter(Boolean);
+		const dnsEntry = sanEntries.find((entry) => entry.startsWith("DNS:"));
+		if (dnsEntry) return dnsEntry.slice(4).trim();
+		const cnMatch = cert.subject.match(/(?:^|,\s*)CN\s*=\s*([^,]+)/i);
+		if (cnMatch?.[1]) return cnMatch[1].trim();
+	} catch {
+		// ignore
+	}
+	return null;
+}
+
+function resolvePreferredPushSubject(host: string, tls: ServerArgs["tls"]): string | null {
+	const explicit = process.env.PI_WEB_PUSH_SUBJECT?.trim();
+	if (explicit) return explicit;
+
+	const certHost = getTlsSubjectHost(tls?.certFile);
+	const fallbackHost = formatSubjectHost(host);
+	const subjectHost = certHost || fallbackHost;
+	if (!subjectHost || isLoopbackHost(subjectHost) || isAnyAddressHost(subjectHost)) return null;
+	return `https://${subjectHost}`;
 }
 
 function resolveBearerToken(req: Request): string | null {
@@ -231,8 +264,9 @@ function createSseStream(signal: AbortSignal) {
 	return { response, send, close };
 }
 
+const { host, port, token, tls } = parseArgs(process.argv);
 const pushService = new PushService();
-await pushService.init();
+await pushService.init(resolvePreferredPushSubject(host, tls));
 const runtime = new PiWebRuntime({
 	onMessageNotification: async (payload) => {
 		const title = `pi${payload.sessionName ? ` · ${payload.sessionName}` : ""}`;
@@ -251,7 +285,6 @@ const runtime = new PiWebRuntime({
 	},
 });
 const faceId = new FaceIdService();
-const { host, port, token, tls } = parseArgs(process.argv);
 const requiresAuth = !isLoopbackHost(host) && !isTailnetHost(host);
 const replayEnabled = process.env.PI_WEB_REPLAY?.trim() === "1";
 
