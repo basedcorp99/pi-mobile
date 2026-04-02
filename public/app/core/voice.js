@@ -1,7 +1,11 @@
 import { enqueueVoiceJob, listVoiceJobs, removeVoiceJob } from "./voice_queue.js";
 
 export function createVoiceRecorder({ api, onTranscription, onNotice, onStateChange }) {
+	const MIC_STREAM_KEEPALIVE_MS = 10 * 60 * 1000;
+
 	let mediaRecorder = null;
+	let micStream = null;
+	let micReleaseTimer = null;
 	let chunks = [];
 	let recording = false;
 	let transcribing = false;
@@ -19,6 +23,58 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 	function getDuration() {
 		if (!recording) return 0;
 		return Math.round((Date.now() - recordingStartTime) / 1000);
+	}
+
+	function clearMicReleaseTimer() {
+		if (!micReleaseTimer) return;
+		clearTimeout(micReleaseTimer);
+		micReleaseTimer = null;
+	}
+
+	function hasLiveMicStream(stream = micStream) {
+		return Boolean(stream && stream.getAudioTracks().some((track) => track.readyState === "live"));
+	}
+
+	function releaseMicStream() {
+		clearMicReleaseTimer();
+		if (!micStream) return;
+		const stream = micStream;
+		micStream = null;
+		stream.getTracks().forEach((track) => {
+			try {
+				track.stop();
+			} catch {
+				// ignore
+			}
+		});
+		onStateChange?.();
+	}
+
+	function scheduleMicRelease(delay = MIC_STREAM_KEEPALIVE_MS) {
+		clearMicReleaseTimer();
+		if (recording || !hasLiveMicStream()) return;
+		micReleaseTimer = setTimeout(() => {
+			micReleaseTimer = null;
+			releaseMicStream();
+		}, delay);
+	}
+
+	async function getMicrophoneStream() {
+		if (hasLiveMicStream()) {
+			clearMicReleaseTimer();
+			micPermissionPrimed = true;
+			return { stream: micStream, promptedForPermission: false, reused: true };
+		}
+
+		const permissionBefore = micPermissionPrimed ? "granted" : await getMicrophonePermissionState();
+		const requestedAt = Date.now();
+		const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+		const promptedForPermission = permissionBefore === "prompt"
+			|| (!micPermissionPrimed && Date.now() - requestedAt > 500);
+		micPermissionPrimed = true;
+		micStream = stream;
+		clearMicReleaseTimer();
+		return { stream, promptedForPermission, reused: false };
 	}
 
 	async function acquireWakeLock() {
@@ -97,7 +153,7 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 		}
 	}
 
-	async function start(options = {}) {
+	async function start() {
 		if (recording) return { started: true };
 		if (!isSupported()) {
 			onNotice?.("Voice recording not supported in this browser.", "error");
@@ -105,17 +161,7 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 		}
 
 		try {
-			const permissionBefore = micPermissionPrimed ? "granted" : await getMicrophonePermissionState();
-			const requestedAt = Date.now();
-			const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-			const promptedForPermission = permissionBefore === "prompt" || (!micPermissionPrimed && Date.now() - requestedAt > 500);
-			micPermissionPrimed = true;
-			if (options.allowPriming !== false && promptedForPermission) {
-				stream.getTracks().forEach((t) => t.stop());
-				onNotice?.("Microphone enabled. Hold again to record.", "info");
-				onStateChange?.();
-				return { started: false, primed: true };
-			}
+			const { stream, promptedForPermission } = await getMicrophoneStream();
 			const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
 				? "audio/webm;codecs=opus"
 				: MediaRecorder.isTypeSupported("audio/webm")
@@ -125,18 +171,20 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 						: "";
 
 			if (!mimeType) {
-				stream.getTracks().forEach((t) => t.stop());
+				scheduleMicRelease();
 				onNotice?.("No supported audio format found.", "error");
-				return;
+				return { started: false };
 			}
 
 			chunks = [];
+			clearMicReleaseTimer();
 			mediaRecorder = new MediaRecorder(stream, { mimeType });
 			mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
 			mediaRecorder.onstop = async () => {
-				stream.getTracks().forEach((t) => t.stop());
+				mediaRecorder = null;
 				recording = false;
 				await releaseWakeLock();
+				scheduleMicRelease();
 				onStateChange?.();
 
 				if (chunks.length === 0) {
@@ -160,15 +208,28 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 				}
 			};
 
+			mediaRecorder.onerror = async () => {
+				recording = false;
+				mediaRecorder = null;
+				await releaseWakeLock();
+				scheduleMicRelease();
+				onStateChange?.();
+			};
+
 			mediaRecorder.start();
 			recording = true;
 			recordingStartTime = Date.now();
 			await acquireWakeLock();
 			onStateChange?.();
+			if (promptedForPermission) {
+				onNotice?.("Microfono autorizzato: terrò il permesso caldo per i prossimi minuti.", "info");
+			}
 			return { started: true };
 		} catch (error) {
 			recording = false;
+			mediaRecorder = null;
 			await releaseWakeLock();
+			scheduleMicRelease();
 			onNotice?.(error instanceof Error ? error.message : String(error), "error");
 			return { started: false };
 		}
@@ -176,7 +237,7 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 
 	function stop() {
 		if (!recording || !mediaRecorder) return;
-		mediaRecorder.stop();
+		if (mediaRecorder.state !== "inactive") mediaRecorder.stop();
 	}
 
 	function toggle() {
@@ -185,9 +246,16 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 	}
 
 	document.addEventListener("visibilitychange", () => {
+		if (document.visibilityState === "hidden") {
+			if (!recording) releaseMicStream();
+			return;
+		}
 		if (document.visibilityState === "visible" && recording && !wakeLockSentinel) {
 			void acquireWakeLock();
 		}
+	});
+	window.addEventListener("pagehide", () => {
+		if (!recording) releaseMicStream();
 	});
 
 	return { isSupported, isRecording, isTranscribing, getDuration, start, stop, toggle, resumePending };
