@@ -538,6 +538,40 @@ export function createSessionController({
 		}
 	}
 
+	async function compact(customInstructions) {
+		if (!activeSessionId || actionBusy) return;
+		actionBusy = "compact";
+		onStateChange();
+		const payload = {
+			type: "compact",
+			clientId,
+			...(typeof customInstructions === "string" && customInstructions.trim() ? { customInstructions: customInstructions.trim() } : {}),
+		};
+		try {
+			await api.postJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/command`, payload);
+			if (activeSessionId) await refreshState({ silent: true, syncMessages: true });
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			if (msg.includes("Not controller") || msg.includes("not_controller")) {
+				try {
+					await api.postJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/takeover`, { clientId });
+					await api.postJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/command`, payload);
+					if (activeSessionId) await refreshState({ silent: true, syncMessages: true });
+					return;
+				} catch (retryError) {
+					if (isSessionGoneError(retryError)) { handleSessionLost(); return; }
+					chatView.appendNotice("Failed to take control of session", "error");
+					return;
+				}
+			}
+			if (isSessionGoneError(error)) { handleSessionLost(); return; }
+			chatView.appendNotice(msg, "error");
+		} finally {
+			if (actionBusy === "compact") actionBusy = null;
+			onStateChange();
+		}
+	}
+
 	async function abortRun() {
 		if (!activeSessionId || actionBusy) return;
 		const hadPendingTools = chatView.hasPendingTools();
@@ -638,6 +672,7 @@ export function createSessionController({
 		setSteeringMode,
 		setFollowUpMode,
 		abortRun,
+		compact,
 		takeOver,
 		release,
 		openSessionId,

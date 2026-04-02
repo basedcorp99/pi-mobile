@@ -729,6 +729,17 @@ export class PiWebRuntime {
 			return;
 		}
 
+		if (command.type === "compact") {
+			this.assertController(runtime, command.clientId);
+			const customInstructions =
+				typeof command.customInstructions === "string" && command.customInstructions.trim().length > 0
+					? command.customInstructions.trim()
+					: undefined;
+			await runtime.session.compact(customInstructions);
+			this.broadcast(sessionId, { type: "state_patch", patch: buildPatch(runtime.session) });
+			return;
+		}
+
 		if (command.type === "prompt") {
 			this.assertController(runtime, command.clientId);
 			const text = typeof command.text === "string" ? command.text.trim() : "";
@@ -953,7 +964,7 @@ export class PiWebRuntime {
 				}
 			}
 
-			if (event.type === "agent_end" || event.type === "auto_compaction_end") {
+			if (event.type === "agent_end" || event.type === "compaction_end") {
 				this.broadcast(sessionId, { type: "state_patch", patch: buildPatch(session) });
 			}
 		});

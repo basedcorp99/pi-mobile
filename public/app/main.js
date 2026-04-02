@@ -53,6 +53,7 @@ const btnCompact = document.getElementById("btn-compact");
 const btnRelease = document.getElementById("btn-release");
 const btnTakeoverTxt = btnTakeover?.querySelector?.(".txt") || null;
 const btnAbortTxt = btnAbort?.querySelector?.(".txt") || null;
+const btnCompactTxt = btnCompact?.querySelector?.(".txt") || null;
 const btnReleaseTxt = btnRelease?.querySelector?.(".txt") || null;
 const btnAttach = document.getElementById("btn-attach");
 const btnVoice = document.getElementById("btn-voice");
@@ -247,7 +248,7 @@ function updateAttachmentControls() {
 	const hasSession = Boolean(sessionCtrl.getActiveSessionId());
 	const isController = hasSession && sessionCtrl.isController();
 	const actionBusy = sessionCtrl.getActionBusy ? sessionCtrl.getActionBusy() : null;
-	const disabled = !hasSession || !isController || actionBusy === "release";
+	const disabled = !hasSession || !isController || actionBusy === "release" || actionBusy === "compact";
 	if (btnCommands) btnCommands.disabled = disabled;
 	if (btnAttach) btnAttach.disabled = disabled;
 	if (btnVoice) btnVoice.disabled = disabled || !voiceUiReady || voiceRecorder?.isTranscribing?.();
@@ -308,18 +309,19 @@ function updateControls() {
 	btnTakeover.disabled = !hasSession || isController || streaming || Boolean(actionBusy);
 	if (btnCompact) btnCompact.disabled = !hasSession || !isController || streaming || Boolean(actionBusy);
 	btnRelease.disabled = !hasSession || !isController || Boolean(actionBusy);
-	input.disabled = !hasSession || !isController || actionBusy === "release";
+	input.disabled = !hasSession || !isController || actionBusy === "release" || actionBusy === "compact";
 	if (btnModel) btnModel.disabled = !canChangeSettings;
 	if (btnThinking) btnThinking.disabled = !canChangeSettings;
 	if (btnTakeoverTxt) btnTakeoverTxt.textContent = actionBusy === "takeover" ? "Taking…" : "Take over";
 	if (btnAbortTxt) btnAbortTxt.textContent = actionBusy === "abort" ? "Aborting…" : "Abort";
+	if (btnCompactTxt) btnCompactTxt.textContent = actionBusy === "compact" ? "Compacting…" : "Compact";
 	if (btnReleaseTxt) btnReleaseTxt.textContent = actionBusy === "release" ? "Releasing…" : "Release";
 	updateAttachmentControls();
 
 	if (kbEsc) kbEsc.disabled = !hasSession || Boolean(actionBusy && actionBusy !== "abort");
 	if (kbTakeover) kbTakeover.disabled = !hasSession || isController || streaming || Boolean(actionBusy);
 	if (kbRelease) kbRelease.disabled = !hasSession || !isController || Boolean(actionBusy);
-	if (kbEnter) kbEnter.disabled = !hasSession || !isController || actionBusy === "release";
+	if (kbEnter) kbEnter.disabled = !hasSession || !isController || actionBusy === "release" || actionBusy === "compact";
 
 	if (!hasSession) {
 		input.placeholder = "";
@@ -601,9 +603,7 @@ document.addEventListener("visibilitychange", () => {
 
 btnAbort.addEventListener("click", () => void sessionCtrl.abortRun());
 if (btnCompact) btnCompact.addEventListener("click", () => {
-	void sessionCtrl.sendPrompt("/compact").catch((error) => {
-		sessionCtrl.appendNotice(error instanceof Error ? error.message : String(error), "error");
-	});
+	void sessionCtrl.compact();
 });
 btnTakeover.addEventListener("click", () => {
 	void sessionCtrl.takeOver().catch((error) => {
