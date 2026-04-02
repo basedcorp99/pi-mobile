@@ -795,7 +795,7 @@
     .editor-inner {
       display: flex;
       align-items: flex-end;
-      padding: 0 8px 0 16px;
+      padding: 1px 8px 1px 16px;
       gap: 4px;
     }
     .editor-inner .editor-input {
@@ -940,6 +940,7 @@
       }
       .app-logo { font-size: 21px; }
       .top-pill { font-size: 13px; padding: 6px 12px; }
+      .editor-inner { padding-top: 4px; padding-bottom: 4px; }
       .top-btn { padding: 10px 14px; min-height: 46px; font-size: 15px; gap: 8px; border-radius: 11px; }
       .hbtn { width: 46px; height: 46px; border-radius: 12px; }
       .keybtn { padding: 10px 14px; min-width: 54px; min-height: 46px; font-size: 15px; border-radius: 11px; }
