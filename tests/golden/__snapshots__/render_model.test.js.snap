@@ -1,4 +1,4 @@
-// Bun Snapshot v1, https://goo.gl/fbAQLP
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`golden: render model basic 1`] = `
 [
@@ -66,7 +66,7 @@ exports[`golden: render model tool_before_message 1`] = `
   },
   {
     "notices": [],
-    "text": "",
+    "text": "ok",
     "thinking": "tool came before message_start",
     "type": "assistant",
   },

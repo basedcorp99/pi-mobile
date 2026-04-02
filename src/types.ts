@@ -20,6 +20,18 @@ export interface ApiListReposResponse {
 	repos: string[];
 }
 
+export interface ApiImageContent {
+	type: "image";
+	data: string;
+	mimeType: string;
+}
+
+export interface ApiSessionCommand {
+	name: string;
+	description?: string;
+	source: "extension" | "prompt" | "skill";
+}
+
 export interface ApiAddRepoRequest {
 	cwd: string;
 }
@@ -88,10 +100,27 @@ export interface ApiSessionState {
 	stats: ApiSessionStats | null;
 	contextUsage: ApiContextUsage | null;
 	messages: AgentMessage[];
+	commands: ApiSessionCommand[];
+}
+
+export interface ApiAskQuestion {
+	id: string;
+	question: string;
+	description?: string;
+	options: Array<{ label: string }>;
+	multi?: boolean;
+	recommended?: number;
+}
+
+export interface ApiAskSelection {
+	selectedOptions: string[];
+	customInput?: string;
 }
 
 export type ApiCommandRequest =
-	| { type: "prompt"; clientId: string; text: string; deliverAs?: "followUp" | "steer" }
+	| { type: "prompt"; clientId: string; text: string; images?: ApiImageContent[]; deliverAs?: "followUp" | "steer" }
+	| { type: "ask_response"; clientId: string; askId: string; cancelled?: boolean; selections: ApiAskSelection[] }
+	| { type: "ui_response"; clientId: string; uiId: string; cancelled?: boolean; value?: string }
 	| { type: "abort"; clientId: string }
 	| { type: "set_model"; clientId: string; provider: string; modelId: string }
 	| { type: "set_thinking_level"; clientId: string; level: string }
@@ -100,6 +129,7 @@ export type ApiCommandRequest =
 	| { type: "set_session_name"; clientId: string; name: string };
 
 export interface ApiSessionPatch {
+	isStreaming?: boolean;
 	model?: ApiSessionState["model"];
 	thinkingLevel?: string;
 	sessionName?: string;
@@ -107,6 +137,7 @@ export interface ApiSessionPatch {
 	followUpMode?: ApiSessionState["followUpMode"];
 	stats?: ApiSessionState["stats"];
 	contextUsage?: ApiSessionState["contextUsage"];
+	commands?: ApiSessionCommand[];
 }
 
 export interface ApiOkResponse {
@@ -132,4 +163,9 @@ export type SseEvent =
 	| { type: "agent_event"; event: AgentSessionEvent }
 	| { type: "state_patch"; patch: ApiSessionPatch }
 	| { type: "controller_changed"; controllerClientId: string | null }
-	| { type: "released"; byClientId: string };
+	| { type: "released"; byClientId: string }
+	| { type: "ask_request"; askId: string; questions: ApiAskQuestion[] }
+	| { type: "ui_select"; uiId: string; title: string; options: string[] }
+	| { type: "ui_input"; uiId: string; title: string; placeholder?: string }
+	| { type: "ui_confirm"; uiId: string; title: string; message: string }
+	| { type: "ui_notify"; message: string; level: "info" | "warning" | "error" };

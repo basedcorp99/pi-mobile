@@ -23,6 +23,15 @@ export function createApi(token) {
 		return body;
 	}
 
-	return { headers, getJson, postJson };
+	async function postFormData(path, formData) {
+		const h = {};
+		if (token) h.authorization = `Bearer ${token}`;
+		const res = await fetch(path, { method: "POST", headers: h, body: formData });
+		const body = await res.json().catch(() => ({}));
+		if (!res.ok) throw new Error(body.error || `${res.status} ${res.statusText}`);
+		return body;
+	}
+
+	return { headers, getJson, postJson, postFormData };
 }
 

@@ -1,9 +1,25 @@
 import { createApi } from "./core/api.js";
 import { isPhoneLike } from "./core/device.js";
 import { installFaceIdGuard } from "./core/faceid.js";
-import { getOrCreateClientId, getToken } from "./core/storage.js";
+import { installPushNotifications } from "./core/push.js";
+import { fileToImageContent } from "./core/image_upload.js";
+import { createVoiceRecorder } from "./core/voice.js";
+import {
+	getFaceIdEnabled,
+	getFontScalePreference,
+	getOrCreateClientId,
+	getSendOnEnterEnabled,
+	getThemePreference,
+	getToken,
+	setFontScalePreference,
+	setSendOnEnterEnabled,
+	setThemePreference,
+} from "./core/storage.js";
 import { createSessionController } from "./session/controller.js";
 import { createMenu } from "./ui/menu.js";
+import { createAskDialog } from "./ui/ask_dialog.js";
+import { createUiPromptDialog } from "./ui/ui_prompt_dialog.js";
+import { createAgentLauncher } from "./ui/agent_launcher.js";
 import { createSidebar } from "./ui/sidebar.js";
 
 const sessionsList = document.getElementById("sessions-list");
@@ -19,8 +35,13 @@ const footerRight2 = document.getElementById("footer-right-2");
 const rolePill = document.getElementById("role-pill");
 const btnModel = document.getElementById("btn-model");
 const btnThinking = document.getElementById("btn-thinking");
+const btnCommands = document.getElementById("btn-commands");
+const attachBarEl = document.getElementById("attach-bar");
+const btnMenuHeader = document.getElementById("btn-menu-header");
+const btnNotify = document.getElementById("btn-notify");
 const lblModel = document.getElementById("lbl-model");
 const lblThinking = document.getElementById("lbl-thinking");
+const lblNotify = document.getElementById("lbl-notify");
 
 const sidebarLabel = document.getElementById("sidebar-label");
 const btnSidebarLeft = document.getElementById("btn-sidebar-left");
@@ -29,6 +50,16 @@ const btnSidebarRight = document.getElementById("btn-sidebar-right");
 const btnTakeover = document.getElementById("btn-takeover");
 const btnAbort = document.getElementById("btn-abort");
 const btnRelease = document.getElementById("btn-release");
+const btnTakeoverTxt = btnTakeover?.querySelector?.(".txt") || null;
+const btnAbortTxt = btnAbort?.querySelector?.(".txt") || null;
+const btnReleaseTxt = btnRelease?.querySelector?.(".txt") || null;
+const btnAttach = document.getElementById("btn-attach");
+const btnVoice = document.getElementById("btn-voice");
+const btnAttachClear = document.getElementById("btn-attach-clear");
+const attachList = document.getElementById("attach-list");
+const btnTheme = document.getElementById("btn-theme");
+const btnSettings = document.getElementById("btn-settings");
+const imageInput = document.getElementById("image-input");
 
 const menuOverlay = document.getElementById("menu-overlay");
 const menuScrim = document.getElementById("menu-scrim");
@@ -45,15 +76,42 @@ const kbEnter = document.getElementById("kb-enter");
 
 const clientId = getOrCreateClientId();
 const token = getToken();
-const replayName = new URL(window.location.href).searchParams.get("replay")?.trim() || null;
+const currentUrl = new URL(window.location.href);
+const replayName = currentUrl.searchParams.get("replay")?.trim() || null;
+const sessionParam = currentUrl.searchParams.get("session")?.trim() || null;
+let lastSyncedSessionUrl = null;
 const api = createApi(token);
-const faceIdGuard = installFaceIdGuard({ api });
+const faceIdEnabled = getFaceIdEnabled();
+const faceIdGuard = faceIdEnabled ? installFaceIdGuard({ api }) : { start: async () => {} };
+let pushCtrl = null;
+
+// Preferences
+let sendOnEnter = getSendOnEnterEnabled();
+let fontScale = getFontScalePreference();
+const savedTheme = getThemePreference();
+if (savedTheme === "light") document.body.classList.add("light");
+document.documentElement.style.setProperty("--font-scale", String(fontScale));
 
 let workingIntervalId = null;
 let workingFrame = 0;
 
 let sidebarCtrl = null;
 let menuCtrl = null;
+let askDialog = null;
+let uiPromptDialog = null;
+let agentLauncher = null;
+let pendingAttachments = [];
+
+function syncSessionUrl(sessionId) {
+	if (replayName) return;
+	const normalized = typeof sessionId === "string" && sessionId.trim() ? sessionId.trim() : null;
+	if (normalized === lastSyncedSessionUrl) return;
+	const url = new URL(window.location.href);
+	if (normalized) url.searchParams.set("session", normalized);
+	else url.searchParams.delete("session");
+	history.replaceState(null, "", url.toString());
+	lastSyncedSessionUrl = normalized;
+}
 
 function formatTokens(n) {
 	const num = Number(n || 0);
@@ -108,17 +166,18 @@ function buildSessionMetrics(state) {
 function updateFooter() {
 	const activeState = sessionCtrl.getActiveState();
 	if (!activeState) {
-		footerLine1.textContent = "—";
+		footerLine1.textContent = "";
 		footerLeft2.textContent = "—";
 		footerRight2.textContent = "—";
 		return;
 	}
 
-	footerLine1.textContent = activeState.cwd || "—";
+	footerLine1.textContent = "";
 
 	const model = activeState.model ? `${activeState.model.provider}/${activeState.model.id}` : "(no model)";
 	const metrics = buildSessionMetrics(activeState);
 	const leftParts = [];
+	if (activeState.cwd) leftParts.push(activeState.cwd);
 	if (metrics) leftParts.push(metrics);
 	leftParts.push(activeState.sessionId.slice(0, 8));
 	footerLeft2.textContent = leftParts.join(" • ");
@@ -127,6 +186,7 @@ function updateFooter() {
 
 function updateRolePill() {
 	const role = sessionCtrl.getRole();
+	if (!rolePill) return;
 	rolePill.textContent = role;
 	rolePill.classList.remove("controller", "viewer");
 	rolePill.classList.add(role);
@@ -144,6 +204,69 @@ function updateTopSelectors() {
 		lblThinking.textContent = thinking;
 		lblThinking.title = thinking;
 	}
+}
+
+function renderAttachmentBar() {
+	if (attachList) {
+		attachList.innerHTML = "";
+		for (const [index, attachment] of pendingAttachments.entries()) {
+			const chip = document.createElement("div");
+			chip.className = "attach-chip";
+			chip.title = attachment.label;
+
+			const label = document.createElement("span");
+			label.textContent = attachment.label;
+			chip.appendChild(label);
+
+			const remove = document.createElement("button");
+			remove.type = "button";
+			remove.textContent = "×";
+			remove.title = "Remove image";
+			remove.addEventListener("click", () => {
+				pendingAttachments.splice(index, 1);
+				renderAttachmentBar();
+				updateControls();
+			});
+			chip.appendChild(remove);
+
+			attachList.appendChild(chip);
+		}
+	}
+	if (btnAttachClear) btnAttachClear.hidden = pendingAttachments.length === 0;
+	if (attachBarEl) attachBarEl.style.display = pendingAttachments.length > 0 ? "flex" : "none";
+}
+
+function clearAttachments() {
+	pendingAttachments = [];
+	renderAttachmentBar();
+	updateControls();
+}
+
+function updateAttachmentControls() {
+	const hasSession = Boolean(sessionCtrl.getActiveSessionId());
+	const isController = hasSession && sessionCtrl.isController();
+	const actionBusy = sessionCtrl.getActionBusy ? sessionCtrl.getActionBusy() : null;
+	const disabled = !hasSession || !isController || actionBusy === "release";
+	if (btnCommands) btnCommands.disabled = disabled;
+	if (btnAttach) btnAttach.disabled = disabled;
+	if (btnVoice) btnVoice.disabled = disabled || !voiceUiReady || voiceRecorder?.isTranscribing?.();
+	if (btnAttachClear) btnAttachClear.disabled = disabled || pendingAttachments.length === 0;
+	if (imageInput) imageInput.disabled = disabled;
+	if (!disabled && pendingAttachments.length === 0) {
+		renderAttachmentBar();
+	}
+}
+
+async function addImageFiles(files) {
+	const list = Array.from(files || []).filter((file) => file && String(file.type || "").startsWith("image/"));
+	if (list.length === 0) return;
+	const remaining = Math.max(0, 4 - pendingAttachments.length);
+	for (const file of list.slice(0, remaining)) {
+		const image = await fileToImageContent(file);
+		pendingAttachments.push(image);
+	}
+	renderAttachmentBar();
+	updateControls();
 }
 
 function updateWorkingIndicator() {
@@ -177,28 +300,37 @@ function updateControls() {
 	const isController = hasSession && sessionCtrl.isController();
 	const streaming = Boolean(sessionCtrl.getActiveState() && sessionCtrl.getActiveState().isStreaming);
 	const phone = isPhoneLike();
-	const canChangeSettings = hasSession && isController && !streaming;
+	const actionBusy = sessionCtrl.getActionBusy ? sessionCtrl.getActionBusy() : null;
+	const canChangeSettings = hasSession && isController && !streaming && !actionBusy;
 
-	btnAbort.disabled = !hasSession;
-	btnTakeover.disabled = !hasSession || isController || streaming;
-	btnRelease.disabled = !hasSession || !isController;
-	input.disabled = !hasSession || !isController;
+	btnAbort.disabled = !hasSession || Boolean(actionBusy && actionBusy !== "abort");
+	btnTakeover.disabled = !hasSession || isController || streaming || Boolean(actionBusy);
+	btnRelease.disabled = !hasSession || !isController || Boolean(actionBusy);
+	input.disabled = !hasSession || !isController || actionBusy === "release";
 	if (btnModel) btnModel.disabled = !canChangeSettings;
 	if (btnThinking) btnThinking.disabled = !canChangeSettings;
+	if (btnTakeoverTxt) btnTakeoverTxt.textContent = actionBusy === "takeover" ? "Taking…" : "Take over";
+	if (btnAbortTxt) btnAbortTxt.textContent = actionBusy === "abort" ? "Aborting…" : "Abort";
+	if (btnReleaseTxt) btnReleaseTxt.textContent = actionBusy === "release" ? "Releasing…" : "Release";
+	updateAttachmentControls();
 
-	if (kbEsc) kbEsc.disabled = !hasSession;
-	if (kbTakeover) kbTakeover.disabled = !hasSession || isController || streaming;
-	if (kbRelease) kbRelease.disabled = !hasSession || !isController;
-	if (kbEnter) kbEnter.disabled = !hasSession || !isController;
+	if (kbEsc) kbEsc.disabled = !hasSession || Boolean(actionBusy && actionBusy !== "abort");
+	if (kbTakeover) kbTakeover.disabled = !hasSession || isController || streaming || Boolean(actionBusy);
+	if (kbRelease) kbRelease.disabled = !hasSession || !isController || Boolean(actionBusy);
+	if (kbEnter) kbEnter.disabled = !hasSession || !isController || actionBusy === "release";
 
 	if (!hasSession) {
 		input.placeholder = "";
 	} else if (isController) {
 		input.placeholder = phone
-			? "Type a prompt (Enter key to send, Return key for newline)"
+			? sendOnEnter
+				? "Type a prompt (Enter key to send, Return key for newline)"
+				: "Type a prompt (Enter for newline, Ctrl+Enter to send)"
 			: streaming
 				? "Streaming… (Esc to abort, Enter to queue follow-up)"
-				: "Type a prompt (Enter to send, Shift+Enter for newline)";
+				: sendOnEnter
+					? "Type a prompt (Enter to send, Shift+Enter for newline)"
+					: "Type a prompt (Enter for newline, Ctrl+Enter to send)";
 	} else {
 		input.placeholder = streaming ? "Viewer mode — Esc to abort" : "Viewer mode — Take over to type";
 	}
@@ -223,13 +355,48 @@ function fillBorders() {
 	});
 }
 
-function sendPromptFromInput() {
-	if (input.disabled) return;
+async function sendPromptFromInput() {
+	if (input.disabled) return false;
 	const text = input.value;
+	const images = pendingAttachments.map((attachment) => attachment.content);
+	if (!text.trim() && images.length === 0) return false;
+	const snapshot = pendingAttachments.slice();
 	input.value = "";
 	autoResize(input);
-	void sessionCtrl.sendPrompt(text);
-	input.focus();
+	clearAttachments();
+	try {
+		await sessionCtrl.sendPrompt(text, images);
+		return true;
+	} catch (error) {
+		pendingAttachments = snapshot;
+		renderAttachmentBar();
+		updateControls();
+		sessionCtrl.appendNotice(error instanceof Error ? error.message : String(error), "error");
+		return false;
+	} finally {
+		input.focus();
+	}
+}
+
+function closeOpenOverlays() {
+	let closed = false;
+	if (menuOverlay?.classList?.contains("open")) {
+		menuCtrl?.close?.();
+		askDialog?.close?.();
+		uiPromptDialog?.close?.();
+		agentLauncher?.close?.();
+		closed = true;
+	}
+	if (sidebar?.classList?.contains("open")) {
+		sidebarCtrl?.setOpen?.(false);
+		closed = true;
+	}
+	return closed;
+}
+
+function handleEscapeAction() {
+	if (closeOpenOverlays()) return;
+	void sessionCtrl.abortRun();
 }
 
 const sessionCtrl = createSessionController({
@@ -239,12 +406,41 @@ const sessionCtrl = createSessionController({
 	token,
 	isPhoneLikeFn: isPhoneLike,
 	onStateChange: () => {
+		syncSessionUrl(sessionCtrl.getActiveSessionId());
 		updateFooter();
 		updateControls();
 	},
 	onCloseMenu: () => menuCtrl?.close(),
 	onSidebarClose: () => sidebarCtrl?.setOpen(false),
 	onSidebarRefresh: () => sidebarCtrl?.refresh(),
+	onAskRequest: (askId, questions) => {
+		if (askDialog) {
+			askDialog.show(askId, questions, (id, cancelled, selections) => {
+				void sessionCtrl.sendAskResponse(id, cancelled, selections);
+			});
+		}
+	},
+	onUiSelect: (uiId, title, options) => {
+		if (uiPromptDialog) {
+			uiPromptDialog.showSelect(uiId, title, options, (id, cancelled, value) => {
+				void sessionCtrl.sendUiResponse(id, cancelled, value);
+			});
+		}
+	},
+	onUiInput: (uiId, title, placeholder) => {
+		if (uiPromptDialog) {
+			uiPromptDialog.showInput(uiId, title, placeholder, (id, cancelled, value) => {
+				void sessionCtrl.sendUiResponse(id, cancelled, value);
+			});
+		}
+	},
+	onUiConfirm: (uiId, title, message) => {
+		if (uiPromptDialog) {
+			uiPromptDialog.showConfirm(uiId, title, message, (id, cancelled, value) => {
+				void sessionCtrl.sendUiResponse(id, cancelled, value);
+			});
+		}
+	},
 });
 
 sidebarCtrl = createSidebar({
@@ -258,9 +454,13 @@ sidebarCtrl = createSidebar({
 	clientId,
 	onNotice: sessionCtrl.appendNotice,
 	getActiveSessionId: () => sessionCtrl.getActiveSessionId(),
-	onSelectSession: (s) => sessionCtrl.selectSession(s),
+	onSelectSession: async (s) => {
+		await sessionCtrl.selectSession(s);
+		clearAttachments();
+	},
 	onSessionIdSelected: (sessionId) => {
 		sessionCtrl.openSessionId(sessionId);
+		clearAttachments();
 		updateControls();
 	},
 });
@@ -271,44 +471,334 @@ menuCtrl = createMenu({
 	menuPanel,
 	btnModel,
 	btnThinking,
+	btnCommands,
+	btnSettings,
 	api,
 	clientId,
 	onNotice: sessionCtrl.appendNotice,
 	getActiveSessionId: () => sessionCtrl.getActiveSessionId(),
 	getActiveState: () => sessionCtrl.getActiveState(),
+	getPrefs: () => ({
+		theme: document.body.classList.contains("light") ? "light" : "dark",
+		sendOnEnter,
+		fontScale,
+		faceIdEnabled,
+		pushSupported: pushCtrl?.isSupported?.() ?? false,
+		pushSubscribed: pushCtrl?.isSubscribed?.() ?? false,
+		steeringMode: sessionCtrl.getActiveState()?.steeringMode || null,
+		followUpMode: sessionCtrl.getActiveState()?.followUpMode || null,
+		hasSessionControl: Boolean(sessionCtrl.getActiveSessionId() && sessionCtrl.isController()),
+	}),
+	onToggleTheme: () => {
+		const isLight = document.body.classList.toggle("light");
+		setThemePreference(isLight ? "light" : "dark");
+		if (btnTheme) btnTheme.textContent = isLight ? "☾" : "☀";
+	},
+	onToggleSendOnEnter: () => {
+		sendOnEnter = !sendOnEnter;
+		setSendOnEnterEnabled(sendOnEnter);
+		updateControls();
+	},
+	onAdjustFontScale: (delta) => {
+		fontScale = Math.max(0.85, Math.min(1.35, Math.round((fontScale + delta) * 100) / 100));
+		setFontScalePreference(fontScale);
+		document.documentElement.style.setProperty("--font-scale", String(fontScale));
+	},
+	onTogglePush: async () => {
+		if (!pushCtrl) return;
+		await pushCtrl.toggle();
+	},
+	onSetSteeringMode: async (mode) => {
+		await sessionCtrl.setSteeringMode(mode);
+	},
+	onSetFollowUpMode: async (mode) => {
+		await sessionCtrl.setFollowUpMode(mode);
+	},
+	onInsertCommand: (value) => {
+		if (input.disabled) return;
+		input.value = value;
+		autoResize(input);
+		input.focus();
+	},
+	onRunAgent: () => {
+		if (agentLauncher) agentLauncher.show();
+	},
+});
+
+askDialog = createAskDialog({ menuOverlay, menuScrim, menuPanel });
+uiPromptDialog = createUiPromptDialog({ menuOverlay, menuScrim, menuPanel });
+agentLauncher = createAgentLauncher({
+	menuOverlay, menuPanel, api,
+	onSubmit: (cmd) => void sessionCtrl.sendPrompt(cmd),
+});
+
+pushCtrl = installPushNotifications({
+	api,
+	btnNotify,
+	lblNotify,
+	onNotice: sessionCtrl.appendNotice,
+});
+void pushCtrl.start();
+
+let voiceRecordingMode = null;
+let voiceUiReady = false;
+const voiceRecorder = createVoiceRecorder({
+	api,
+	onTranscription: (text) => {
+		if (!input.disabled) {
+			const before = input.value;
+			input.value = before ? `${before} ${text}` : text;
+			autoResize(input);
+			input.focus();
+		}
+	},
+	onNotice: sessionCtrl.appendNotice,
+	onStateChange: () => {
+		if (btnVoice) {
+			const rec = voiceRecorder.isRecording();
+			const trans = voiceRecorder.isTranscribing();
+			if (!rec) voiceRecordingMode = null;
+			btnVoice.classList.toggle("recording", rec);
+			btnVoice.classList.toggle("transcribing", voiceUiReady && trans);
+			btnVoice.classList.toggle("pending", !voiceUiReady && !rec);
+			btnVoice.disabled = trans || !voiceUiReady;
+			btnVoice.textContent = !voiceUiReady ? "\uD83C\uDF99" : trans ? "⏳" : "\uD83C\uDF99";
+			btnVoice.title = !voiceUiReady
+				? "Voice loading…"
+				: trans
+					? "Transcribing…"
+					: rec
+						? (voiceRecordingMode === "hold" ? "Release to stop" : "Tap to stop")
+						: "Tap or hold to record";
+		}
+	},
+});
+void voiceRecorder.resumePending({ silent: true }).finally(() => {
+	voiceUiReady = true;
+	if (btnVoice) {
+		btnVoice.classList.toggle("pending", false);
+		btnVoice.textContent = voiceRecorder.isTranscribing() ? "⏳" : "\uD83C\uDF99";
+	}
+	updateControls();
+});
+let voiceWasHidden = false;
+document.addEventListener("visibilitychange", () => {
+	if (document.visibilityState === "hidden") {
+		voiceWasHidden = true;
+		return;
+	}
+	if (document.visibilityState === "visible" && voiceWasHidden) {
+		voiceWasHidden = false;
+		void voiceRecorder.resumePending({ silent: true });
+	}
 });
 
 btnAbort.addEventListener("click", () => void sessionCtrl.abortRun());
-btnTakeover.addEventListener("click", () => void sessionCtrl.takeOver());
-btnRelease.addEventListener("click", () => void sessionCtrl.release());
+btnTakeover.addEventListener("click", () => {
+	void sessionCtrl.takeOver().catch((error) => {
+		sessionCtrl.appendNotice(error instanceof Error ? error.message : String(error), "error");
+	});
+});
+btnRelease.addEventListener("click", () => {
+	void sessionCtrl.release().catch((error) => {
+		sessionCtrl.appendNotice(error instanceof Error ? error.message : String(error), "error");
+	});
+});
+if (btnAttach) btnAttach.addEventListener("click", () => imageInput?.click());
+if (btnVoice) {
+	let pressActive = false;
+	let holdStarting = false;
+	let holdTimer = null;
+	let activePointerId = null;
+	const HOLD_DELAY_MS = 220;
+	const pulseHaptic = () => {
+		try { navigator.vibrate?.(12); } catch {}
+	};
+	const clearHoldTimer = () => {
+		if (holdTimer) {
+			clearTimeout(holdTimer);
+			holdTimer = null;
+		}
+	};
+
+	const startVoiceRecording = async (mode, e) => {
+		if (btnVoice.disabled || holdStarting || voiceRecorder.isRecording() || voiceRecorder.isTranscribing()) return;
+		e?.preventDefault?.();
+		holdStarting = true;
+		voiceRecordingMode = mode;
+		if (mode === "hold") {
+			btnVoice.classList.add("holding");
+			pulseHaptic();
+			if (typeof activePointerId === "number" && btnVoice.setPointerCapture) {
+				try { btnVoice.setPointerCapture(activePointerId); } catch {}
+			}
+		}
+		try {
+			const result = await voiceRecorder.start();
+			if (result?.primed) {
+				voiceRecordingMode = null;
+				btnVoice.classList.remove("holding");
+				return;
+			}
+		} finally {
+			holdStarting = false;
+			if (mode === "hold" && !pressActive && voiceRecorder.isRecording()) {
+				pulseHaptic();
+				voiceRecorder.stop();
+			}
+			if (!pressActive) btnVoice.classList.remove("holding");
+		}
+	};
+
+	const stopVoiceHold = (e) => {
+		if (voiceRecordingMode !== "hold" && !holdStarting && !pressActive) return;
+		e?.preventDefault?.();
+		clearHoldTimer();
+		pressActive = false;
+		activePointerId = null;
+		btnVoice.classList.remove("holding");
+		if (voiceRecordingMode === "hold" && voiceRecorder.isRecording()) {
+			pulseHaptic();
+			voiceRecorder.stop();
+		}
+	};
+
+	const toggleTapRecording = async (e) => {
+		if (btnVoice.disabled || holdStarting || voiceRecorder.isTranscribing()) return;
+		e?.preventDefault?.();
+		clearHoldTimer();
+		if (voiceRecorder.isRecording()) {
+			if (voiceRecordingMode === "tap") {
+				pulseHaptic();
+				voiceRecorder.stop();
+			}
+			return;
+		}
+		pulseHaptic();
+		await startVoiceRecording("tap", e);
+	};
+
+	btnVoice.addEventListener("pointerdown", (e) => {
+		if (e.button !== 0 || btnVoice.disabled || voiceRecorder.isTranscribing()) return;
+		pressActive = true;
+		activePointerId = e.pointerId;
+		clearHoldTimer();
+		holdTimer = setTimeout(() => {
+			holdTimer = null;
+			if (pressActive && !voiceRecorder.isRecording() && !voiceRecorder.isTranscribing()) {
+				void startVoiceRecording("hold", e);
+			}
+		}, HOLD_DELAY_MS);
+	});
+	btnVoice.addEventListener("pointerup", async (e) => {
+		const wasPendingTap = Boolean(pressActive && holdTimer);
+		if (wasPendingTap) {
+			pressActive = false;
+			activePointerId = null;
+			clearHoldTimer();
+			await toggleTapRecording(e);
+			return;
+		}
+		stopVoiceHold(e);
+	});
+	btnVoice.addEventListener("pointercancel", stopVoiceHold);
+	window.addEventListener("pointerup", (e) => {
+		if (voiceRecordingMode === "hold" || holdStarting) stopVoiceHold(e);
+	});
+	window.addEventListener("pointercancel", stopVoiceHold);
+	window.addEventListener("pagehide", stopVoiceHold);
+	document.addEventListener("visibilitychange", () => {
+		if (document.visibilityState === "hidden") stopVoiceHold();
+	});
+	btnVoice.addEventListener("keydown", async (e) => {
+		if ((e.key === " " || e.key === "Enter") && !e.repeat) {
+			e.preventDefault();
+			if (voiceRecorder.isRecording() && voiceRecordingMode === "tap") {
+				pulseHaptic();
+				voiceRecorder.stop();
+				return;
+			}
+			await toggleTapRecording(e);
+		}
+	});
+}
+if (btnAttachClear) btnAttachClear.addEventListener("click", () => clearAttachments());
+if (btnTheme) btnTheme.addEventListener("click", () => {
+	const isLight = document.body.classList.toggle("light");
+	setThemePreference(isLight ? "light" : "dark");
+	btnTheme.textContent = isLight ? "☾" : "☀";
+});
+if (btnTheme && document.body.classList.contains("light")) btnTheme.textContent = "☾";
+if (btnSettings) btnSettings.addEventListener("click", () => menuCtrl.openSettingsMenu());
+if (imageInput) {
+	imageInput.addEventListener("change", async () => {
+		try {
+			await addImageFiles(imageInput.files || []);
+		} catch (error) {
+			sessionCtrl.appendNotice(error instanceof Error ? error.message : String(error), "error");
+		} finally {
+			imageInput.value = "";
+		}
+	});
+}
 if (btnModel) btnModel.addEventListener("click", () => void menuCtrl.openModelMenu());
 if (btnThinking) btnThinking.addEventListener("click", () => menuCtrl.openThinkingMenu());
+if (btnCommands) {
+	btnCommands.addEventListener("mousedown", (e) => e.preventDefault());
+	btnCommands.addEventListener("click", () => {
+		if (document.activeElement === input) input.blur();
+		setTimeout(() => menuCtrl.openCommandsMenu(), 50);
+	});
+}
 
 if (kbMenu) kbMenu.addEventListener("click", () => sidebarCtrl.toggleOpen());
-if (kbEsc) kbEsc.addEventListener("click", () => void sessionCtrl.abortRun());
-if (kbTakeover) kbTakeover.addEventListener("click", () => void sessionCtrl.takeOver());
-if (kbRelease) kbRelease.addEventListener("click", () => void sessionCtrl.release());
+if (btnMenuHeader) btnMenuHeader.addEventListener("click", () => sidebarCtrl.toggleOpen());
+if (kbEsc) kbEsc.addEventListener("click", () => handleEscapeAction());
+if (kbTakeover) kbTakeover.addEventListener("click", () => {
+	void sessionCtrl.takeOver().catch((error) => {
+		sessionCtrl.appendNotice(error instanceof Error ? error.message : String(error), "error");
+	});
+});
+if (kbRelease) kbRelease.addEventListener("click", () => {
+	void sessionCtrl.release().catch((error) => {
+		sessionCtrl.appendNotice(error instanceof Error ? error.message : String(error), "error");
+	});
+});
 if (kbEnter) kbEnter.addEventListener("click", () => sendPromptFromInput());
 
 if (sidebarOverlay) sidebarOverlay.addEventListener("click", () => sidebarCtrl.setOpen(false));
 
 input.addEventListener("input", () => autoResize(input));
 input.addEventListener("keydown", (e) => {
-	if (isPhoneLike()) return;
-	if (e.key === "Enter" && !e.shiftKey) {
+	if (e.key !== "Enter" || e.isComposing) return;
+	if (sendOnEnter) {
+		if (!e.shiftKey) {
+			e.preventDefault();
+			sendPromptFromInput();
+		}
+		return;
+	}
+	if ((e.ctrlKey || e.metaKey) && !e.shiftKey) {
 		e.preventDefault();
 		sendPromptFromInput();
 	}
 });
 
+window.addEventListener("paste", async (e) => {
+	const files = Array.from(e.clipboardData?.files || []).filter((file) => file && String(file.type || "").startsWith("image/"));
+	if (files.length === 0) return;
+	e.preventDefault();
+	try {
+		await addImageFiles(files);
+	} catch (error) {
+		sessionCtrl.appendNotice(error instanceof Error ? error.message : String(error), "error");
+	}
+});
+
 window.addEventListener("keydown", (e) => {
 	if (e.key === "Escape") {
-		if (menuCtrl.isOpen()) {
-			e.preventDefault();
-			menuCtrl.close();
-			return;
-		}
-		void sessionCtrl.abortRun();
+		e.preventDefault();
+		handleEscapeAction();
 	}
 });
 
@@ -319,11 +809,72 @@ window.addEventListener("resize", () => sidebarCtrl.setOpen(false));
 updateFooter();
 updateControls();
 
+async function openSessionFromParam() {
+	if (!sessionParam) return;
+	try {
+		const data = await api.getJson("/api/active-sessions");
+		const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+		const match = sessions.find((s) => s && s.id === sessionParam);
+		if (match) {
+			sessionCtrl.openSessionId(match.id);
+			clearAttachments();
+			updateControls();
+		}
+	} catch {
+		// ignore
+	}
+}
+
+function installSidebarSwipeGestures() {
+	let tracking = null;
+	const edgeThreshold = 28;
+	const commitThreshold = 70;
+	document.addEventListener("touchstart", (e) => {
+		if (!sidebarCtrl || !e.touches || e.touches.length !== 1) return;
+		const touch = e.touches[0];
+		const sidebarOpen = sidebar?.classList?.contains("open");
+		const inSidebar = sidebar?.contains?.(e.target);
+		const inOverlay = sidebarOverlay?.contains?.(e.target);
+		if (!sidebarOpen && touch.clientX <= edgeThreshold) {
+			tracking = { mode: "open", x: touch.clientX, y: touch.clientY };
+			return;
+		}
+		if (sidebarOpen && (inSidebar || inOverlay)) {
+			tracking = { mode: "close", x: touch.clientX, y: touch.clientY };
+		}
+	}, { passive: true });
+	const reset = () => { tracking = null; };
+	document.addEventListener("touchend", reset, { passive: true });
+	document.addEventListener("touchcancel", reset, { passive: true });
+	document.addEventListener("touchmove", (e) => {
+		if (!tracking || !e.touches || e.touches.length !== 1) return;
+		const touch = e.touches[0];
+		const dx = touch.clientX - tracking.x;
+		const dy = touch.clientY - tracking.y;
+		if (Math.abs(dx) < 20 || Math.abs(dx) < Math.abs(dy)) return;
+		if (tracking.mode === "open" && dx > commitThreshold) {
+			sidebarCtrl.setOpen(true);
+			tracking = null;
+		}
+		if (tracking.mode === "close" && dx < -commitThreshold) {
+			sidebarCtrl.setOpen(false);
+			tracking = null;
+		}
+	}, { passive: true });
+}
+installSidebarSwipeGestures();
+
 if (replayName) {
+	clearAttachments();
 	void sessionCtrl.runReplay(replayName);
 } else {
-	void sidebarCtrl.refresh();
+	void sidebarCtrl.refresh().then(() => openSessionFromParam());
 	setInterval(() => void sidebarCtrl.refresh(), 5_000);
 }
 
-void faceIdGuard.start();
+if (faceIdEnabled) void faceIdGuard.start();
+
+// Prevent pinch zoom and double-tap zoom
+document.addEventListener("touchstart", (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+document.addEventListener("gesturestart", (e) => e.preventDefault(), { passive: false });
+document.addEventListener("gesturechange", (e) => e.preventDefault(), { passive: false });

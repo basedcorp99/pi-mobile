@@ -1,0 +1,107 @@
+[
+  {
+    "type": "init",
+    "yourClientId": "fixture",
+    "controllerClientId": "fixture",
+    "role": "controller",
+    "state": {
+      "sessionId": "sess_tool_answer_on_end_only_0001",
+      "cwd": "/REPO_ROOT",
+      "sessionFile": null,
+      "sessionName": "tool_answer_on_end_only",
+      "isStreaming": false,
+      "model": { "provider": "openrouter", "id": "z-ai/glm-4.7" },
+      "thinkingLevel": "high",
+      "steeringMode": "all",
+      "followUpMode": "all",
+      "stats": null,
+      "contextUsage": null,
+      "messages": []
+    }
+  },
+  {
+    "type": "agent_event",
+    "event": {
+      "type": "message_start",
+      "message": {
+        "role": "user",
+        "content": [{ "type": "text", "text": "run bash then answer" }],
+        "timestamp": 1
+      }
+    }
+  },
+  {
+    "type": "agent_event",
+    "event": {
+      "type": "message_end",
+      "message": {
+        "role": "user",
+        "content": [{ "type": "text", "text": "run bash then answer" }],
+        "timestamp": 1
+      }
+    }
+  },
+  { "type": "agent_event", "event": { "type": "turn_start" } },
+  { "type": "agent_event", "event": { "type": "agent_start" } },
+  {
+    "type": "agent_event",
+    "event": {
+      "type": "message_start",
+      "message": {
+        "role": "assistant",
+        "content": [
+          { "type": "toolCall", "id": "tool-2", "name": "bash", "arguments": { "command": "printf done" } }
+        ],
+        "timestamp": 2
+      }
+    }
+  },
+  {
+    "type": "agent_event",
+    "event": {
+      "type": "message_end",
+      "message": {
+        "role": "assistant",
+        "content": [
+          { "type": "toolCall", "id": "tool-2", "name": "bash", "arguments": { "command": "printf done" } }
+        ],
+        "timestamp": 2
+      }
+    }
+  },
+  {
+    "type": "agent_event",
+    "event": {
+      "type": "tool_execution_start",
+      "toolCallId": "tool-2",
+      "toolName": "bash",
+      "args": { "command": "printf done" }
+    }
+  },
+  {
+    "type": "agent_event",
+    "event": {
+      "type": "tool_execution_end",
+      "toolCallId": "tool-2",
+      "toolName": "bash",
+      "isError": false,
+      "result": {
+        "content": [{ "type": "text", "text": "done" }]
+      }
+    }
+  },
+  {
+    "type": "agent_event",
+    "event": {
+      "type": "message_end",
+      "message": {
+        "role": "assistant",
+        "content": [
+          { "type": "text", "text": "Final summary after bash." }
+        ],
+        "timestamp": 3
+      }
+    }
+  },
+  { "type": "agent_event", "event": { "type": "agent_end", "messages": [] } }
+]

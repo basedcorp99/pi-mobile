@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { toolCallToText, toolPreviewLines, toolResultToText } from "../../public/app/core/tool_format.js";
+import { parseAssistantContent } from "../../public/app/session/content.js";
+import { parseSubagentSlashMessage } from "../../public/app/session/subagent_slash.js";
 
 function extractTextContent(content) {
 	if (typeof content === "string") return content;
@@ -43,6 +45,7 @@ function applySseEvents(events) {
 	const blocks = [];
 	let currentAssistantIndex = null;
 	const toolById = new Map();
+	const subagentByRequestId = new Map();
 	const appendedUserMessageKeys = new Set();
 
 	const ensureAssistant = () => {
@@ -95,6 +98,26 @@ function applySseEvents(events) {
 		if (e.type === "message_start") {
 			if (e.message && e.message.role === "user") appendUser(e.message);
 			if (e.message && e.message.role === "assistant") ensureAssistant();
+			if (e.message && (e.message.customType || e.message.role === "custom")) {
+				const subagent = parseSubagentSlashMessage(e.message);
+				if (subagent) {
+					const next = {
+						type: "subagent",
+						requestId: subagent.requestId,
+						status: subagent.status,
+						title: subagent.title,
+						summary: subagent.summary,
+						text: subagent.body,
+					};
+					const existingIndex = subagentByRequestId.get(subagent.requestId);
+					if (typeof existingIndex === "number") blocks[existingIndex] = next;
+					else {
+						blocks.push(next);
+						subagentByRequestId.set(subagent.requestId, blocks.length - 1);
+					}
+					continue;
+				}
+			}
 			continue;
 		}
 
@@ -115,6 +138,19 @@ function applySseEvents(events) {
 			const msg = e.message;
 			if (msg && msg.role === "user") appendUser(msg);
 			if (msg && msg.role === "assistant") {
+				const parsed = parseAssistantContent(msg.content);
+				const hasRenderableAssistantContent = Boolean(parsed.text || parsed.thinking);
+				if (currentAssistantIndex === null && hasRenderableAssistantContent) {
+					ensureAssistant();
+				}
+				if (currentAssistantIndex !== null) {
+					if (parsed.thinking && (!blocks[currentAssistantIndex].thinking || parsed.thinking.length >= blocks[currentAssistantIndex].thinking.length)) {
+						blocks[currentAssistantIndex].thinking = parsed.thinking;
+					}
+					if (parsed.text && (!blocks[currentAssistantIndex].text || parsed.text.length >= blocks[currentAssistantIndex].text.length)) {
+						blocks[currentAssistantIndex].text = parsed.text;
+					}
+				}
 				// Mirror UI: abort notice lives inside the assistant block if no tool calls.
 				const stopReason = typeof msg.stopReason === "string" ? msg.stopReason : "";
 				if ((stopReason === "aborted" || stopReason === "error") && currentAssistantIndex !== null) {
@@ -163,6 +199,20 @@ function applySseEvents(events) {
 			tool.view = computeToolView(tool.toolName, tool.fullText, false);
 			continue;
 		}
+
+		if (e.type === "agent_end") {
+			const messages = Array.isArray(e.messages) ? e.messages : [];
+			for (const msg of messages) {
+				if (msg && msg.role === "assistant") {
+					const parsed = parseAssistantContent(msg.content);
+					if (parsed.text || parsed.thinking) {
+						blocks.push({ type: "assistant", thinking: parsed.thinking || "", text: parsed.text || "", notices: [] });
+					}
+				}
+			}
+			currentAssistantIndex = null;
+			continue;
+		}
 	}
 
 	return blocks;
@@ -192,6 +242,52 @@ describe("golden: render model", () => {
 	test("abort", async () => {
 		const events = await loadFixture("abort");
 		expect(applySseEvents(events)).toMatchSnapshot();
+	});
+
+	test("subagent slash result updates inline card", async () => {
+		const events = await loadFixture("subagent_slash");
+		expect(applySseEvents(events)).toEqual([
+			{
+				type: "subagent",
+				requestId: "req-subagent-1",
+				status: "success",
+				title: "subagent scout",
+				summary: "done",
+				text: "## Findings\n\n- Found auth flow in `src/auth.ts`",
+			},
+		]);
+	});
+
+	test("assistant text survives when only present on message_end after tool call", async () => {
+		const events = await loadFixture("tool_answer_on_end");
+		const blocks = applySseEvents(events);
+		expect(blocks).toContainEqual({ type: "assistant", thinking: "", text: "The bash command returned ok.", notices: [] });
+		expect(blocks).toContainEqual({
+			type: "tool",
+			toolCallId: "tool-1",
+			toolName: "bash",
+			status: "success",
+			call: "$ printf ok",
+			fullText: "ok",
+			view: {
+				truncated: false,
+				previewLines: 5,
+				expanded: false,
+				viewText: "ok",
+			},
+		});
+	});
+
+	test("assistant text renders even if final turn skips message_start", async () => {
+		const events = await loadFixture("tool_answer_on_end_only");
+		const blocks = applySseEvents(events);
+		expect(blocks).toContainEqual({ type: "assistant", thinking: "", text: "Final summary after bash.", notices: [] });
+	});
+
+	test("agent_end can recover final assistant text if message_end is missing", async () => {
+		const events = await loadFixture("agent_end_recovery");
+		const blocks = applySseEvents(events);
+		expect(blocks).toContainEqual({ type: "assistant", thinking: "", text: "Recovered final answer.", notices: [] });
 	});
 });
 

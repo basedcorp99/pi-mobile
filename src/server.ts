@@ -1,8 +1,11 @@
 import { existsSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { PiWebRuntime, type SessionClient } from "./session-runtime.ts";
 import { FaceIdService } from "./faceid.ts";
+import { PushService } from "./push.ts";
+import { transcribeAudio } from "./voice.ts";
 import type {
 	ApiCommandRequest,
 	ApiActiveSessionsResponse,
@@ -228,7 +231,25 @@ function createSseStream(signal: AbortSignal) {
 	return { response, send, close };
 }
 
-const runtime = new PiWebRuntime();
+const pushService = new PushService();
+await pushService.init();
+const runtime = new PiWebRuntime({
+	onMessageNotification: async (payload) => {
+		const title = `pi${payload.sessionName ? ` · ${payload.sessionName}` : ""}`;
+		const body = payload.messageText.length > 140 ? `${payload.messageText.slice(0, 137)}…` : payload.messageText;
+		const result = await pushService.send({
+			title,
+			body,
+			url: "/",
+			sessionId: payload.sessionId,
+			sessionName: payload.sessionName,
+			tag: payload.sessionId,
+		});
+		if (result.sent > 0 || result.failed > 0) {
+			console.log(`[push] sent=${result.sent} failed=${result.failed} title="${title}"`);
+		}
+	},
+});
 const faceId = new FaceIdService();
 const { host, port, token, tls } = parseArgs(process.argv);
 const requiresAuth = !isLoopbackHost(host) && !isTailnetHost(host);
@@ -246,6 +267,43 @@ const simpleWebAuthnBrowserUrlPrefix = "/vendor/simplewebauthn/browser/esm/";
 
 function requireJsonBody(req: Request): Promise<Record<string, unknown>> {
 	return req.json().catch(() => ({}));
+}
+
+function fuzzyFindDirs(query: string): Promise<string[]> {
+	return new Promise((resolve, reject) => {
+		const trimmed = query.trim();
+		if (!trimmed) return resolve([]);
+
+		const zoxideBin = existsSync("/root/.local/bin/zoxide") ? "/root/.local/bin/zoxide" : "zoxide";
+		const fdBin = existsSync("/root/.pi/agent/bin/fd") ? "/root/.pi/agent/bin/fd" : "fd";
+		const fzfBin = existsSync("/usr/bin/fzf") ? "/usr/bin/fzf" : "fzf";
+
+		const finish = (zoxideOut: string, fdFzfOut: string) => {
+			const seen = new Set<string>();
+			const dirs = [...zoxideOut.split("\n"), ...fdFzfOut.split("\n")]
+				.map((line) => line.trim())
+				.filter(Boolean)
+				.filter((line) => {
+					if (seen.has(line)) return false;
+					seen.add(line);
+					return true;
+				})
+				.slice(0, 20);
+			resolve(dirs);
+		};
+
+		// Prefer zoxide ranking first (great for short repo names like "machinx").
+		execFile(zoxideBin, ["query", "-l", trimmed], { timeout: 1500 }, (zErr, zStdout) => {
+			if (zErr && (zErr as any).killed) return reject(new Error("Search timed out"));
+
+			// Then widen via fd + fzf over actual directories.
+			const cmd = `${JSON.stringify(fdBin)} --type d --hidden --exclude node_modules --exclude .git . /root /home 2>/dev/null | ${JSON.stringify(fzfBin)} --filter=${JSON.stringify(trimmed)} | head -20`;
+			execFile("bash", ["-lc", cmd], { timeout: 5000 }, (fdErr, fdStdout) => {
+				if (fdErr && (fdErr as any).killed) return reject(new Error("Search timed out"));
+				finish(zStdout || "", fdStdout || "");
+			});
+		});
+	});
 }
 
 function isApiPath(pathname: string): boolean {
@@ -306,6 +364,7 @@ function parseSessionRoute(pathname: string): { sessionId: string; action: strin
 Bun.serve({
 	hostname: host,
 	port,
+	idleTimeout: 255,
 	...(tls ? { tls: { cert: Bun.file(tls.certFile), key: Bun.file(tls.keyFile) } } : {}),
 	async fetch(req): Promise<Response> {
 		const url = new URL(req.url);
@@ -356,10 +415,35 @@ Bun.serve({
 			return json(body, 200);
 		}
 
+		if (req.method === "GET" && url.pathname === "/api/agents") {
+			try {
+				const { discoverAgentsAll } = await import("/usr/lib/node_modules/pi-subagents/agents.ts");
+				const cwd = url.searchParams.get("cwd") || process.cwd();
+				const data = discoverAgentsAll(cwd);
+				const agents = [...(data.user || []), ...(data.project || []), ...(data.builtin || [])]
+					.map((a: any) => ({ name: a.name, description: a.description || "", scope: a.scope || "builtin" }));
+				return json({ agents }, 200);
+			} catch {
+				return json({ agents: [] }, 200);
+			}
+		}
+
 		if (req.method === "GET" && url.pathname === "/api/repos") {
 			const repos = await runtime.listRepos();
 			const body: ApiListReposResponse = { repos };
 			return json(body, 200);
+		}
+
+		if (req.method === "GET" && url.pathname === "/api/dirs/search") {
+			const query = url.searchParams.get("q") || "";
+			if (!query.trim()) return json({ dirs: [] }, 200);
+			try {
+				const dirs = await fuzzyFindDirs(query.trim());
+				return json({ dirs }, 200);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return errorResponse(message, 500);
+			}
 		}
 
                 if (req.method === "GET" && url.pathname === "/api/faceid/status") {
@@ -383,6 +467,63 @@ Bun.serve({
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				return errorResponse(message, 400);
+			}
+		}
+
+		if (req.method === "GET" && url.pathname === "/api/push/public-key") {
+			try {
+				return json({ publicKey: pushService.getPublicKey() }, 200);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return errorResponse(message, 400);
+			}
+		}
+
+		if (req.method === "POST" && url.pathname === "/api/push/subscribe") {
+			const raw = (await requireJsonBody(req)) as { subscription?: unknown };
+			try {
+				return json(await pushService.subscribe(raw.subscription as PushSubscriptionJSON), 200);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return errorResponse(message, 400);
+			}
+		}
+
+		if (req.method === "POST" && url.pathname === "/api/push/unsubscribe") {
+			const raw = (await requireJsonBody(req)) as { endpoint?: unknown };
+			if (typeof raw?.endpoint !== "string" || !raw.endpoint.trim()) {
+				return errorResponse("Missing endpoint", 400);
+			}
+			try {
+				return json(await pushService.unsubscribe(raw.endpoint.trim()), 200);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return errorResponse(message, 400);
+			}
+		}
+
+		if (req.method === "POST" && url.pathname === "/api/voice/transcribe") {
+			try {
+				const contentType = req.headers.get("content-type") || "";
+				if (!contentType.includes("audio/") && !contentType.includes("application/octet-stream") && !contentType.includes("multipart/form-data")) {
+					return errorResponse("Expected audio content", 400);
+				}
+				let audioBuffer: Buffer;
+				if (contentType.includes("multipart/form-data")) {
+					const formData = await req.formData();
+					const file = formData.get("audio");
+					if (!file || !(file instanceof Blob)) return errorResponse("Missing audio field", 400);
+					audioBuffer = Buffer.from(await file.arrayBuffer());
+				} else {
+					audioBuffer = Buffer.from(await req.arrayBuffer());
+				}
+				if (audioBuffer.length === 0) return errorResponse("Empty audio", 400);
+				if (audioBuffer.length > 25 * 1024 * 1024) return errorResponse("Audio too large (25MB max)", 400);
+				const result = await transcribeAudio(audioBuffer);
+				return json(result, 200);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return errorResponse(message, 500);
 			}
 		}
 
@@ -535,6 +676,28 @@ Bun.serve({
 				if (message === "session_not_running") return errorResponse("Session not running", 404);
 				if (message === "not_controller") return errorResponse("Not controller", 403);
 				return errorResponse(message, 400);
+			}
+		}
+
+		if (req.method === "POST" && action === "stop") {
+			try {
+				await runtime.stopSession(sessionId);
+				return ok();
+			} catch (error) {
+				return errorResponse(error instanceof Error ? error.message : String(error), 400);
+			}
+		}
+
+		if (req.method === "DELETE") {
+			// Delete by session path (passed as query param)
+			const url = new URL(req.url, `http://${host}`);
+			const sessionPath = url.searchParams.get("path");
+			if (!sessionPath) return errorResponse("Missing path query param", 400);
+			try {
+				await runtime.deleteSession(sessionPath);
+				return ok();
+			} catch (error) {
+				return errorResponse(error instanceof Error ? error.message : String(error), 400);
 			}
 		}
 

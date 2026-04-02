@@ -1,0 +1,5 @@
+config.json
+nemo128.onnx
+encoder-model.int8.onnx
+decoder_joint-model.int8.onnx
+vocab.txt

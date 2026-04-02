@@ -2,19 +2,32 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0b2a1a" />
   <title>pi</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="stylesheet" href="/styles.css?v=20260402ac" />
 </head>
 <body>
 
   <div class="app-header">
     <div class="app-header-left">
+      <button class="hbtn" id="btn-menu-header" title="Sessions" aria-label="Sessions">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="4" y1="6" x2="20" y2="6"/>
+          <line x1="4" y1="12" x2="20" y2="12"/>
+          <line x1="4" y1="18" x2="20" y2="18"/>
+        </svg>
+      </button>
       <span class="app-logo">π</span>
-      <span class="app-logo-ver">pi-web</span>
+      <button class="hbtn" id="btn-theme" title="Toggle light/dark">☀</button>
+      <button class="hbtn" id="btn-settings" title="Settings" aria-label="Settings">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33h.01A1.65 1.65 0 0 0 10 3.09V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
     </div>
 	    <div class="app-header-right">
-	      <span class="top-pill viewer" id="role-pill">viewer</span>
 	      <button class="top-btn top-select" id="btn-model" title="Model">
 	        <span class="txt">Model</span>
 	        <span class="sel" id="lbl-model">—</span>
@@ -62,25 +75,13 @@
 	    </nav>
 
     <div class="chat">
-      <div class="msgs" id="msgs">
-        <div class="assistant-block"><div class="thinking-text">No session selected.</div></div>
-      </div>
-
-      <div class="working" id="working">
-        <span class="work-spin" id="work-spin" aria-hidden="true">⠋</span>
-        <span class="work-text">Working...</span>
-      </div>
-
-      <div class="keybar" id="keybar">
+      <div class="keybar keybar-top" id="keybar-top">
         <button class="keybtn" id="kb-menu" title="Menu">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="4" y1="6" x2="20" y2="6"/>
             <line x1="4" y1="12" x2="20" y2="12"/>
           <line x1="4" y1="18" x2="20" y2="18"/>
         </svg>
-      </button>
-      <button class="keybtn warn" id="kb-esc" title="Esc (Abort)">
-        Esc
       </button>
       <button class="keybtn" id="kb-release" title="Release">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v10"/><path d="M18.36 6.64a9 9 0 1 1-12.72 0"/></svg>
@@ -90,16 +91,36 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M13 5l7 7-7 7"/></svg>
         Take over
       </button>
-      <button class="keybtn ok" id="kb-enter" title="Send (Enter)">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h14"/><path d="M12 5l7 7-7 7"/></svg>
-        Enter
-      </button>
     </div>
+
+      <div class="msgs" id="msgs">
+        <div class="msgs-spacer"></div>
+        <div class="assistant-block"><div class="thinking-text">No session selected.</div></div>
+      </div>
+
+      <div class="working" id="working">
+        <span class="work-spin" id="work-spin" aria-hidden="true">⠋</span>
+        <span class="work-text">Working...</span>
+      </div>
+
+      <div class="attach-bar" id="attach-bar" style="display:none">
+        <div class="attach-list" id="attach-list"></div>
+        <button class="attach-btn secondary" id="btn-attach-clear" type="button" hidden>Clear</button>
+      </div>
+      <input type="file" id="image-input" accept="image/*" multiple hidden />
 
       <div class="editor-wrap">
         <div class="editor-border" id="eborder-top">────────────────────────────────────────────────────────────────────────────────────────────</div>
         <div class="editor-inner">
-          <textarea class="editor-input" id="inp" rows="1" placeholder=""></textarea>
+          <textarea class="editor-input" id="inp" rows="1" placeholder="" enterkeyhint="send"></textarea>
+          <div class="editor-btns">
+            <button class="attach-btn secondary" id="btn-commands" type="button">/Cmds</button>
+            <button class="attach-btn attach-icon" id="btn-attach" type="button" title="Attach image">📎</button>
+            <button class="attach-btn voice-btn" id="btn-voice" type="button" title="Voice note">🎙</button>
+            <button class="keybtn keybtn-icon ok" id="kb-enter" title="Send (Enter)" aria-label="Send">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 10l-5 5 5 5"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg>
+            </button>
+          </div>
         </div>
         <div class="editor-border" id="eborder-bot">────────────────────────────────────────────────────────────────────────────────────────────</div>
       </div>
@@ -118,6 +139,6 @@
 	    <div class="menu-scrim" id="menu-scrim"></div>
 	    <div class="menu-panel" id="menu-panel"></div>
 	  </div>
-	  <script type="module" src="/app.js"></script>
+	  <script type="module" src="/app.js?v=20260402ac"></script>
 	</body>
 	</html>

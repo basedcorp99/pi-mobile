@@ -32,11 +32,22 @@ export function createMenu({
 	menuPanel,
 	btnModel,
 	btnThinking,
+	btnCommands,
+	btnSettings,
 	api,
 	clientId,
 	onNotice,
 	getActiveSessionId,
 	getActiveState,
+	getPrefs,
+	onToggleTheme,
+	onToggleSendOnEnter,
+	onAdjustFontScale,
+	onTogglePush,
+	onSetSteeringMode,
+	onSetFollowUpMode,
+	onInsertCommand,
+	onRunAgent,
 }) {
 	let open = false;
 	let cachedModels = null;
@@ -46,7 +57,13 @@ export function createMenu({
 		if (!menuOverlay || !menuPanel) return;
 		open = false;
 		menuOverlay.classList.remove("open");
+		delete menuOverlay.dataset.locked;
+		delete menuOverlay.dataset.kind;
 		menuPanel.innerHTML = "";
+		menuPanel.style.transform = "";
+		menuPanel.style.width = "";
+		menuPanel.style.maxWidth = "";
+		menuPanel.style.maxHeight = "";
 	}
 
 	function position(anchor) {
@@ -84,6 +101,10 @@ export function createMenu({
 		menuPanel.innerHTML = "";
 		menuPanel.style.left = "0px";
 		menuPanel.style.top = "0px";
+		menuPanel.style.transform = "";
+		menuPanel.style.width = "";
+		menuPanel.style.maxWidth = "";
+		menuPanel.style.maxHeight = "";
 		build(menuPanel);
 		position(anchor);
 	}
@@ -265,13 +286,319 @@ export function createMenu({
 		});
 	}
 
-	if (menuScrim) menuScrim.addEventListener("click", () => close());
+	function openCommandsMenu() {
+		if (!btnCommands || btnCommands.disabled) return;
+		openMenu(btnCommands, (panel) => {
+			const hdr = document.createElement("div");
+			hdr.className = "menu-hdr";
+			const title = document.createElement("div");
+			title.className = "menu-title";
+			title.textContent = "Commands";
+			const closeBtn = document.createElement("button");
+			closeBtn.className = "menu-mini";
+			closeBtn.textContent = "Close";
+			closeBtn.addEventListener("click", () => close());
+			hdr.appendChild(title);
+			hdr.appendChild(closeBtn);
+
+			const body = document.createElement("div");
+			body.className = "menu-body";
+
+			const search = document.createElement("input");
+			search.className = "menu-search";
+			search.placeholder = "Search commands…";
+
+			const list = document.createElement("div");
+			list.className = "menu-list";
+			list.textContent = "Loading…";
+
+			const render = () => {
+				list.innerHTML = "";
+				const activeState = getActiveState();
+				const commands = Array.isArray(activeState?.commands) ? activeState.commands : [];
+				const q = search.value.trim().toLowerCase();
+				const filtered = commands.filter((cmd) => {
+					const hay = `${cmd.name} ${cmd.description || ""} ${cmd.source}`.toLowerCase();
+					return !q || hay.includes(q);
+				});
+				const shown = filtered.slice(0, 250);
+				if (shown.length === 0) {
+					const empty = document.createElement("div");
+					empty.className = "si-meta";
+					empty.textContent = commands.length === 0 ? "No commands available." : "No matches.";
+					list.appendChild(empty);
+					return;
+				}
+				for (const cmd of shown) {
+					const item = document.createElement("div");
+					item.className = "menu-item";
+					const primary = document.createElement("div");
+					primary.className = "primary";
+					primary.textContent = `/${cmd.name}`;
+					const secondary = document.createElement("div");
+					secondary.className = "secondary";
+					secondary.textContent = `${cmd.source}${cmd.description ? ` • ${cmd.description}` : ""}`;
+					item.appendChild(primary);
+					item.appendChild(secondary);
+					item.addEventListener("click", () => {
+						if (typeof onInsertCommand === "function") {
+							onInsertCommand(`/${cmd.name} `);
+						}
+						close();
+					});
+					list.appendChild(item);
+				}
+			};
+
+			// Agent launcher button
+			const agentBtn = document.createElement("div");
+			agentBtn.className = "menu-item";
+			agentBtn.style.cssText = "border-bottom:1px solid #2a2a2e;margin-bottom:4px;padding-bottom:8px;";
+			const agentPrimary = document.createElement("div");
+			agentPrimary.className = "primary";
+			agentPrimary.textContent = "🤖 Run Agent";
+			const agentSecondary = document.createElement("div");
+			agentSecondary.className = "secondary";
+			agentSecondary.textContent = "Pick an agent and run a task";
+			agentBtn.appendChild(agentPrimary);
+			agentBtn.appendChild(agentSecondary);
+			agentBtn.addEventListener("click", () => {
+				close();
+				if (typeof onRunAgent === "function") onRunAgent();
+			});
+
+			search.addEventListener("input", render);
+			body.appendChild(agentBtn);
+			body.appendChild(search);
+			body.appendChild(list);
+			panel.appendChild(hdr);
+			panel.appendChild(body);
+			render();
+			search.focus();
+		});
+	}
+
+	function openSettingsMenu() {
+		if (!btnSettings || !menuOverlay || !menuPanel) return;
+		open = true;
+		menuOverlay.classList.add("open");
+		menuPanel.innerHTML = "";
+		menuPanel.style.left = "50%";
+		menuPanel.style.top = "56px";
+		menuPanel.style.transform = "translateX(-50%)";
+		menuPanel.style.width = "min(760px, 94vw)";
+		menuPanel.style.maxWidth = "94vw";
+		menuPanel.style.maxHeight = "calc(100vh - 72px)";
+
+		const renderSettings = () => {
+			menuPanel.innerHTML = "";
+			const prefs = typeof getPrefs === "function"
+				? getPrefs()
+				: { theme: "dark", sendOnEnter: true, fontScale: 1, faceIdEnabled: false, pushSupported: false, pushSubscribed: false, steeringMode: null, followUpMode: null, hasSessionControl: false };
+
+			const hdr = document.createElement("div");
+			hdr.className = "menu-hdr";
+			const title = document.createElement("div");
+			title.className = "menu-title";
+			title.textContent = "Settings";
+			const closeBtn = document.createElement("button");
+			closeBtn.className = "menu-mini";
+			closeBtn.textContent = "Close";
+			closeBtn.addEventListener("click", () => close());
+			hdr.appendChild(title);
+			hdr.appendChild(closeBtn);
+
+			const body = document.createElement("div");
+			body.className = "menu-body";
+			body.style.paddingBottom = "16px";
+
+			const addSection = (label) => {
+				const heading = document.createElement("div");
+				heading.className = "sidebar-label";
+				heading.style.margin = "10px 0 8px";
+				heading.textContent = label;
+				body.appendChild(heading);
+			};
+
+			const makeSetting = ({ name, value, description, active, onClick }) => {
+				const item = document.createElement("div");
+				item.className = `menu-item${active ? " active" : ""}`;
+				const primary = document.createElement("div");
+				primary.className = "primary";
+				primary.textContent = `${name} · ${value}`;
+				const secondary = document.createElement("div");
+				secondary.className = "secondary";
+				secondary.textContent = description;
+				item.appendChild(primary);
+				item.appendChild(secondary);
+				if (typeof onClick === "function") item.addEventListener("click", onClick);
+				return item;
+			};
+
+			const makeStepperSetting = ({ name, value, description, onMinus, onPlus, canMinus = true, canPlus = true }) => {
+				const item = document.createElement("div");
+				item.className = "menu-item setting-stepper";
+				const textWrap = document.createElement("div");
+				textWrap.className = "setting-stepper-text";
+				const primary = document.createElement("div");
+				primary.className = "primary";
+				primary.textContent = `${name} · ${value}`;
+				const secondary = document.createElement("div");
+				secondary.className = "secondary";
+				secondary.textContent = description;
+				textWrap.appendChild(primary);
+				textWrap.appendChild(secondary);
+				const controls = document.createElement("div");
+				controls.className = "setting-stepper-controls";
+				const minus = document.createElement("button");
+				minus.className = "menu-mini setting-stepper-btn";
+				minus.textContent = "−";
+				minus.disabled = !canMinus;
+				minus.addEventListener("click", (e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					if (typeof onMinus === "function") onMinus();
+				});
+				const plus = document.createElement("button");
+				plus.className = "menu-mini setting-stepper-btn";
+				plus.textContent = "+";
+				plus.disabled = !canPlus;
+				plus.addEventListener("click", (e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					if (typeof onPlus === "function") onPlus();
+				});
+				controls.appendChild(minus);
+				controls.appendChild(plus);
+				item.appendChild(textWrap);
+				item.appendChild(controls);
+				return item;
+			};
+
+			addSection("App");
+			body.appendChild(makeSetting({
+				name: "Theme",
+				value: prefs.theme === "light" ? "light" : "dark",
+				description: "Toggle light/dark appearance.",
+				active: prefs.theme === "light",
+				onClick: () => {
+					if (typeof onToggleTheme === "function") onToggleTheme();
+					renderSettings();
+				},
+			}));
+			body.appendChild(makeSetting({
+				name: "Enter sends",
+				value: prefs.sendOnEnter ? "on" : "off",
+				description: prefs.sendOnEnter
+					? "Enter sends, Shift+Enter makes a newline."
+					: "Enter makes a newline, Ctrl+Enter sends.",
+				active: prefs.sendOnEnter,
+				onClick: () => {
+					if (typeof onToggleSendOnEnter === "function") onToggleSendOnEnter();
+					renderSettings();
+				},
+			}));
+			body.appendChild(makeStepperSetting({
+				name: "Text size",
+				value: `${Math.round((Number(prefs.fontScale || 1) || 1) * 100)}%`,
+				description: "Use − / + to decrease or increase text size.",
+				canMinus: Number(prefs.fontScale || 1) > 0.85,
+				canPlus: Number(prefs.fontScale || 1) < 1.35,
+				onMinus: () => {
+					if (typeof onAdjustFontScale === "function") onAdjustFontScale(-0.05);
+					renderSettings();
+				},
+				onPlus: () => {
+					if (typeof onAdjustFontScale === "function") onAdjustFontScale(0.05);
+					renderSettings();
+				},
+			}));
+			body.appendChild(makeSetting({
+				name: "Notifications",
+				value: prefs.pushSupported ? (prefs.pushSubscribed ? "on" : "off") : "unsupported",
+				description: prefs.pushSupported ? "Enable or disable push notifications." : "Push notifications are not available in this browser.",
+				active: prefs.pushSubscribed,
+				onClick: prefs.pushSupported ? async () => {
+					try {
+						if (typeof onTogglePush === "function") await onTogglePush();
+						renderSettings();
+					} catch (error) {
+						onNotice(error instanceof Error ? error.message : String(error), "error");
+					}
+				} : undefined,
+			}));
+
+			addSection("Pi session");
+			if (!prefs.hasSessionControl) {
+				const note = document.createElement("div");
+				note.className = "menu-item";
+				const primary = document.createElement("div");
+				primary.className = "primary";
+				primary.textContent = "No controllable session";
+				const secondary = document.createElement("div");
+				secondary.className = "secondary";
+				secondary.textContent = "Open a session and take over control to change pi runtime behavior.";
+				note.appendChild(primary);
+				note.appendChild(secondary);
+				body.appendChild(note);
+			} else {
+				const nextSteering = prefs.steeringMode === "all" ? "one-at-a-time" : "all";
+				body.appendChild(makeSetting({
+					name: "Steering mode",
+					value: prefs.steeringMode || "one-at-a-time",
+					description: "Tap to toggle between delivering all queued steering messages or one at a time.",
+					active: prefs.steeringMode === "all",
+					onClick: async () => {
+						try {
+							if (typeof onSetSteeringMode === "function") await onSetSteeringMode(nextSteering);
+							renderSettings();
+						} catch (error) {
+							onNotice(error instanceof Error ? error.message : String(error), "error");
+						}
+					},
+				}));
+				const nextFollow = prefs.followUpMode === "all" ? "one-at-a-time" : "all";
+				body.appendChild(makeSetting({
+					name: "Follow-up mode",
+					value: prefs.followUpMode || "one-at-a-time",
+					description: "Tap to toggle how follow-up queued prompts are delivered after the agent finishes.",
+					active: prefs.followUpMode === "all",
+					onClick: async () => {
+						try {
+							if (typeof onSetFollowUpMode === "function") await onSetFollowUpMode(nextFollow);
+							renderSettings();
+						} catch (error) {
+							onNotice(error instanceof Error ? error.message : String(error), "error");
+						}
+					},
+				}));
+			}
+
+			const footer = document.createElement("div");
+			footer.className = "si-meta";
+			footer.style.marginTop = "12px";
+			footer.textContent = "Model and Thinking stay in the top bar for quick access.";
+			body.appendChild(footer);
+
+			menuPanel.appendChild(hdr);
+			menuPanel.appendChild(body);
+		};
+
+		renderSettings();
+	}
+
+	if (menuScrim) menuScrim.addEventListener("click", () => {
+		if (menuOverlay?.dataset?.locked === "1") return;
+		close();
+	});
 
 	return {
 		close,
 		isOpen: () => open,
 		openModelMenu,
 		openThinkingMenu,
+		openCommandsMenu,
+		openSettingsMenu,
 	};
 }
 

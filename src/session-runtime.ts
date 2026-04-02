@@ -17,6 +17,7 @@ import type {
 	ApiCommandRequest,
 	ApiCreateSessionRequest,
 	ApiModelInfo,
+	ApiSessionCommand,
 	ApiSessionState,
 	ApiSessionSummary,
 	ClientRole,
@@ -28,6 +29,18 @@ export interface SessionClient {
 	clientId: string;
 	send(event: SseEvent): void;
 	close(): void;
+}
+
+export interface SessionNotification {
+	sessionId: string;
+	sessionName?: string;
+	cwd: string;
+	messageRole: string;
+	messageText: string;
+}
+
+export interface PiWebRuntimeOptions {
+	onMessageNotification?: (payload: SessionNotification) => void | Promise<void>;
 }
 
 interface RunningSession {
@@ -94,6 +107,85 @@ function safeStatsSnapshot(session: AgentSession): ApiSessionState["stats"] {
 	}
 }
 
+// Only include built-in commands that actually work in pi-mobile (SDK/headless mode).
+// Commands like /login, /model, /tree, /fork etc. are TUI-only (handled by interactive-mode)
+// and would fall through to the LLM if sent as prompts.
+const BUILTIN_COMMANDS: ApiSessionCommand[] = [
+	{ name: "compact", description: "Compact conversation history", source: "extension" },
+];
+
+function safeCommandsSnapshot(session: AgentSession): ApiSessionCommand[] {
+	try {
+		const result: ApiSessionCommand[] = [];
+		const seen = new Set<string>();
+
+		// 1. Extension commands via private _extensionRunner
+		const runner = (session as any)._extensionRunner;
+		if (runner && typeof runner.getRegisteredCommands === "function") {
+			const cmds = runner.getRegisteredCommands();
+			if (Array.isArray(cmds)) {
+				for (const cmd of cmds) {
+					const name = typeof cmd?.invocationName === "string" ? cmd.invocationName.trim()
+						: typeof cmd?.name === "string" ? cmd.name.trim() : "";
+					if (!name || seen.has(name)) continue;
+					seen.add(name);
+					result.push({
+						name,
+						description: typeof cmd?.description === "string" ? cmd.description.trim() || undefined : undefined,
+						source: "extension",
+					});
+				}
+			}
+		}
+
+		// 2. Prompt templates (public getter)
+		const templates = session.promptTemplates;
+		if (Array.isArray(templates)) {
+			for (const tpl of templates) {
+				const name = typeof (tpl as any)?.name === "string" ? (tpl as any).name.trim() : "";
+				if (!name || seen.has(name)) continue;
+				seen.add(name);
+				result.push({
+					name,
+					description: typeof (tpl as any)?.description === "string" ? (tpl as any).description.trim() || undefined : undefined,
+					source: "prompt",
+				});
+			}
+		}
+
+		// 3. Skills via private _resourceLoader
+		const resourceLoader = (session as any)._resourceLoader;
+		if (resourceLoader && typeof resourceLoader.getSkills === "function") {
+			const skillsResult = resourceLoader.getSkills();
+			const skills = Array.isArray(skillsResult?.skills) ? skillsResult.skills : [];
+			for (const skill of skills) {
+				const name = typeof skill?.name === "string" ? skill.name.trim() : "";
+				if (!name) continue;
+				const fullName = `skill:${name}`;
+				if (seen.has(fullName)) continue;
+				seen.add(fullName);
+				result.push({
+					name: fullName,
+					description: typeof skill?.description === "string" ? skill.description.trim() || undefined : undefined,
+					source: "skill",
+				});
+			}
+		}
+
+		// 4. Built-in pi commands
+		for (const cmd of BUILTIN_COMMANDS) {
+			if (!seen.has(cmd.name)) {
+				seen.add(cmd.name);
+				result.push(cmd);
+			}
+		}
+
+		return result;
+	} catch {
+		return [];
+	}
+}
+
 function buildState(session: AgentSession, cwd: string): ApiSessionState {
 	return {
 		sessionId: session.sessionId,
@@ -108,11 +200,13 @@ function buildState(session: AgentSession, cwd: string): ApiSessionState {
 		stats: safeStatsSnapshot(session),
 		contextUsage: safeContextUsageSnapshot(session),
 		messages: session.messages,
+		commands: safeCommandsSnapshot(session),
 	};
 }
 
 function buildPatch(session: AgentSession): ApiSessionPatch {
 	return {
+		isStreaming: session.isStreaming,
 		model: safeModelSnapshot(session),
 		thinkingLevel: session.thinkingLevel,
 		sessionName: session.sessionName,
@@ -120,6 +214,7 @@ function buildPatch(session: AgentSession): ApiSessionPatch {
 		followUpMode: session.followUpMode,
 		stats: safeStatsSnapshot(session),
 		contextUsage: safeContextUsageSnapshot(session),
+		commands: safeCommandsSnapshot(session),
 	};
 }
 
@@ -162,9 +257,224 @@ function serializeSessionSummary(entry: {
 	};
 }
 
+interface PendingAsk {
+	resolve: (value: { cancelled?: boolean; selections: Array<{ selectedOptions: string[]; customInput?: string }> }) => void;
+	sessionId: string;
+}
+
+interface PendingUiPrompt {
+	resolve: (value: string | undefined) => void;
+	sessionId: string;
+}
+
 export class PiWebRuntime {
 	private runningById = new Map<string, RunningSession>();
 	private runningByPath = new Map<string, string>();
+	private onMessageNotification?: (payload: SessionNotification) => void | Promise<void>;
+	private pendingAsks = new Map<string, PendingAsk>();
+	private pendingUiPrompts = new Map<string, PendingUiPrompt>();
+
+	constructor(options: PiWebRuntimeOptions = {}) {
+		this.onMessageNotification = options.onMessageNotification;
+		this.installAskAdapter();
+	}
+
+	private installAskAdapter(): void {
+		// jiti sandboxes globalThis so __piTelegramAskAdapter doesn't work.
+		// Instead we wrap the ask tool's execute after each session is created.
+	}
+
+	private wrapAskTool(session: AgentSession, sessionId: string): void {
+		const runner = (session as any)._extensionRunner;
+		if (!runner) return;
+
+		// Find the ask tool and wrap its execute
+		for (const ext of (runner as any).extensions ?? []) {
+			const askTool = ext.tools?.get?.("ask");
+			if (!askTool?.definition?.execute) continue;
+
+			const originalExecute = askTool.definition.execute;
+			const self = this;
+			askTool.definition.execute = async function (toolCallId: string, params: any, signal: any, onUpdate: any, ctx: any) {
+				// Intercept: broadcast ask to web clients and wait for response
+				if (params?.questions?.length > 0) {
+					const askId = randomUUID();
+					self.broadcast(sessionId, {
+						type: "ask_request",
+						askId,
+						questions: params.questions,
+					});
+
+					const result = await new Promise<{ cancelled?: boolean; selections: Array<{ selectedOptions: string[]; customInput?: string }> }>((resolve) => {
+						let done = false;
+						let timeout: ReturnType<typeof setTimeout> | null = null;
+						const onAbort = () => finish({ cancelled: true, selections: [] });
+						const finish = (value: { cancelled?: boolean; selections: Array<{ selectedOptions: string[]; customInput?: string }> }) => {
+							if (done) return;
+							done = true;
+							self.pendingAsks.delete(askId);
+							if (timeout) clearTimeout(timeout);
+							if (signal && typeof signal.removeEventListener === "function") {
+								signal.removeEventListener("abort", onAbort);
+							}
+							resolve(value);
+						};
+						self.pendingAsks.set(askId, { resolve: finish, sessionId });
+						timeout = setTimeout(() => finish({ cancelled: true, selections: [] }), 5 * 60 * 1000);
+						if (signal?.aborted) finish({ cancelled: true, selections: [] });
+						else if (signal && typeof signal.addEventListener === "function") signal.addEventListener("abort", onAbort, { once: true });
+					});
+
+					// Build response in the same format the ask extension expects
+					const results = params.questions.map((q: any, i: number) => {
+						const sel = result.selections[i] ?? { selectedOptions: [] };
+						return {
+							id: q.id,
+							question: q.question,
+							...(q.description?.trim() ? { description: q.description } : {}),
+							options: q.options.map((o: any) => o.label),
+							multi: q.multi ?? false,
+							selectedOptions: result.cancelled ? [] : sel.selectedOptions,
+							customInput: sel.customInput,
+						};
+					});
+
+					const summaryLines = results.map((r: any) => {
+						const selected = r.selectedOptions.length > 0
+							? (r.multi ? `[${r.selectedOptions.join(", ")}]` : r.selectedOptions[0])
+							: r.customInput ? `"${r.customInput}"` : "(cancelled)";
+						return `${r.id}: ${selected}`;
+					}).join("\n");
+
+					return {
+						content: [{ type: "text", text: `User answers:\n${summaryLines}` }],
+						details: params.questions.length === 1 ? results[0] : { results },
+					};
+				}
+
+				// Fallback to original
+				return originalExecute.call(this, toolCallId, params, signal, onUpdate, ctx);
+			};
+			break;
+		}
+	}
+
+	resolveAsk(askId: string, cancelled: boolean, selections: Array<{ selectedOptions: string[]; customInput?: string }>): void {
+		const pending = this.pendingAsks.get(askId);
+		if (!pending) return;
+		this.pendingAsks.delete(askId);
+		pending.resolve({ cancelled, selections });
+	}
+
+	resolveUiPrompt(uiId: string, cancelled: boolean, value?: string): void {
+		const pending = this.pendingUiPrompts.get(uiId);
+		if (!pending) return;
+		this.pendingUiPrompts.delete(uiId);
+		pending.resolve(cancelled ? undefined : value);
+	}
+
+	private cancelPendingDialogsForSession(sessionId: string): void {
+		for (const [askId, pending] of this.pendingAsks.entries()) {
+			if (pending.sessionId !== sessionId) continue;
+			this.pendingAsks.delete(askId);
+			pending.resolve({ cancelled: true, selections: [] });
+		}
+		for (const [uiId, pending] of this.pendingUiPrompts.entries()) {
+			if (pending.sessionId !== sessionId) continue;
+			this.pendingUiPrompts.delete(uiId);
+			pending.resolve(undefined);
+		}
+	}
+
+	private createWebUIContext(sessionId: string): any {
+		const self = this;
+		return {
+			async select(title: string, options: string[]): Promise<string | undefined> {
+				const uiId = randomUUID();
+				self.broadcast(sessionId, { type: "ui_select", uiId, title, options });
+				return new Promise<string | undefined>((resolve) => {
+					self.pendingUiPrompts.set(uiId, { resolve, sessionId });
+					setTimeout(() => {
+						if (self.pendingUiPrompts.has(uiId)) {
+							self.pendingUiPrompts.delete(uiId);
+							resolve(undefined);
+						}
+					}, 5 * 60 * 1000);
+				});
+			},
+			async confirm(title: string, message: string): Promise<boolean> {
+				const uiId = randomUUID();
+				self.broadcast(sessionId, { type: "ui_confirm", uiId, title, message });
+				const result = await new Promise<string | undefined>((resolve) => {
+					self.pendingUiPrompts.set(uiId, { resolve, sessionId });
+					setTimeout(() => {
+						if (self.pendingUiPrompts.has(uiId)) {
+							self.pendingUiPrompts.delete(uiId);
+							resolve(undefined);
+						}
+					}, 5 * 60 * 1000);
+				});
+				return result === "true";
+			},
+			async input(title: string, placeholder?: string): Promise<string | undefined> {
+				const uiId = randomUUID();
+				self.broadcast(sessionId, { type: "ui_input", uiId, title, placeholder });
+				return new Promise<string | undefined>((resolve) => {
+					self.pendingUiPrompts.set(uiId, { resolve, sessionId });
+					setTimeout(() => {
+						if (self.pendingUiPrompts.has(uiId)) {
+							self.pendingUiPrompts.delete(uiId);
+							resolve(undefined);
+						}
+					}, 5 * 60 * 1000);
+				});
+			},
+			notify(message: string, type?: "info" | "warning" | "error") {
+				self.broadcast(sessionId, { type: "ui_notify", message, level: type ?? "info" });
+			},
+			onTerminalInput: () => () => {},
+			setStatus() {},
+			setWorkingMessage() {},
+			setHiddenThinkingLabel() {},
+			setWidget() {},
+			setFooter() {},
+			setHeader() {},
+			setTitle() {},
+			async editor(title: string, defaultValue?: string): Promise<string | undefined> {
+				const uiId = randomUUID();
+				self.broadcast(sessionId, { type: "ui_input", uiId, title, placeholder: defaultValue });
+				return new Promise<string | undefined>((resolve) => {
+					self.pendingUiPrompts.set(uiId, { resolve, sessionId });
+					setTimeout(() => {
+						if (self.pendingUiPrompts.has(uiId)) {
+							self.pendingUiPrompts.delete(uiId);
+							resolve(undefined);
+						}
+					}, 5 * 60 * 1000);
+				});
+			},
+			async custom() {
+				self.broadcast(sessionId, {
+					type: "ui_notify",
+					message: "This command needs a custom TUI/overlay, which pi-mobile does not support yet.",
+					level: "warning",
+				});
+				return undefined;
+			},
+			pasteToEditor() {},
+			setEditorText() {},
+			getEditorText: () => "",
+			async editor() { return undefined; },
+			setEditorComponent() {},
+			get theme(): any { return undefined; },
+			getAllThemes: () => [],
+			getTheme: () => undefined,
+			setTheme: () => ({ success: false, error: "UI not available" }),
+			getToolsExpanded: () => false,
+			setToolsExpanded() {},
+		};
+	}
+
 	private authStorage = AuthStorage.create();
 	private modelRegistry = new ModelRegistry(this.authStorage);
 	private repoStorePath = join(homedir(), ".pi", "agent", "pi-web", "repos.json");
@@ -205,7 +515,8 @@ export class PiWebRuntime {
 			if (runtime.cwd.trim()) repos.add(runtime.cwd.trim());
 		}
 
-		return [...repos].sort((a, b) => a.localeCompare(b));
+		// Only return directories that exist on this machine
+		return [...repos].filter(r => existsSync(r)).sort((a, b) => a.localeCompare(b));
 	}
 
 	async addRepo(rawCwd: string): Promise<void> {
@@ -273,25 +584,32 @@ export class PiWebRuntime {
 			});
 		}
 
-		const sessions = [...byId.values()];
-		sessions.sort((a, b) => b.modified.localeCompare(a.modified));
+		const sessions = [...byId.values()]
+			.filter(s => s.isRunning || existsSync(s.cwd))  // hide sessions from non-existent dirs
+			.sort((a, b) => b.modified.localeCompare(a.modified));
 		return sessions;
 	}
 
 	async listModels(): Promise<ApiModelInfo[]> {
-		// Keep auth/models fresh in case keys/models.json changed outside this process (e.g. via native CLI).
-		try {
-			this.authStorage.reload();
-		} catch {
-			// best effort
-		}
-		try {
-			this.modelRegistry.refresh();
-		} catch {
-			// best effort
+		// Use the session's model registry if available — it includes models
+		// registered by extensions via pi.registerProvider().
+		// Fall back to the standalone registry for the model picker before any session.
+		let registry = this.modelRegistry;
+		for (const runtime of this.runningById.values()) {
+			if (runtime.session.modelRegistry) {
+				registry = runtime.session.modelRegistry;
+				break;
+			}
 		}
 
-		const available = this.modelRegistry.getAvailable();
+		try {
+			this.authStorage.reload();
+		} catch {}
+		try {
+			registry.refresh();
+		} catch {}
+
+		const available = registry.getAvailable();
 		return available.map((model) => ({
 			provider: model.provider,
 			id: model.id,
@@ -364,6 +682,8 @@ export class PiWebRuntime {
 				modelRegistry: this.modelRegistry,
 			});
 			const runtime = this.registerSession(session, cwd, clientId);
+			await session.bindExtensions({ uiContext: this.createWebUIContext(runtime.session.sessionId) });
+			this.wrapAskTool(session, runtime.session.sessionId);
 			return { sessionId: runtime.session.sessionId };
 		}
 
@@ -377,6 +697,8 @@ export class PiWebRuntime {
 			modelRegistry: this.modelRegistry,
 		});
 		const runtime = this.registerSession(session, cwd, clientId);
+		await session.bindExtensions({ uiContext: this.createWebUIContext(runtime.session.sessionId) });
+		this.wrapAskTool(session, runtime.session.sessionId);
 		return { sessionId: runtime.session.sessionId };
 	}
 
@@ -387,15 +709,72 @@ export class PiWebRuntime {
 		}
 
 		if (command.type === "abort") {
+			this.cancelPendingDialogsForSession(sessionId);
 			await runtime.session.abort();
+			return;
+		}
+
+		if (command.type === "ask_response") {
+			const askId = typeof command.askId === "string" ? command.askId.trim() : "";
+			if (!askId) throw new Error("missing_ask_id");
+			const selections = Array.isArray(command.selections) ? command.selections : [];
+			this.resolveAsk(askId, Boolean(command.cancelled), selections);
+			return;
+		}
+
+		if (command.type === "ui_response") {
+			const uiId = typeof command.uiId === "string" ? command.uiId.trim() : "";
+			if (!uiId) throw new Error("missing_ui_id");
+			this.resolveUiPrompt(uiId, Boolean(command.cancelled), command.value);
 			return;
 		}
 
 		if (command.type === "prompt") {
 			this.assertController(runtime, command.clientId);
-			const text = command.text.trim();
-			if (text.length === 0) return;
-			await runtime.session.prompt(text, runtime.session.isStreaming ? { streamingBehavior: command.deliverAs ?? "followUp" } : undefined);
+			const text = typeof command.text === "string" ? command.text.trim() : "";
+			const images = Array.isArray(command.images)
+				? command.images
+					.filter((img) => img && typeof img === "object")
+					.map((img) => ({
+						type: "image" as const,
+						data: typeof (img as { data?: unknown }).data === "string" ? (img as { data: string }).data : "",
+						mimeType: typeof (img as { mimeType?: unknown }).mimeType === "string" ? (img as { mimeType: string }).mimeType : "",
+					}))
+					.filter((img) => img.data.length > 0 && img.mimeType.startsWith("image/"))
+					.slice(0, 4)
+				: [];
+			const totalImageChars = images.reduce((sum, img) => sum + img.data.length, 0);
+			if (images.some((img) => img.data.length > 6_000_000) || totalImageChars > 12_000_000) {
+				throw new Error("image_too_large");
+			}
+			if (text.length === 0 && images.length === 0) return;
+
+			// Intercept TUI-only built-in commands that would fall through to the LLM
+			const TUI_ONLY_COMMANDS = new Set(["model", "login", "logout", "new", "resume", "tree", "fork", "name", "session", "share", "export", "import", "copy", "debug", "reload", "hotkeys", "changelog"]);
+			const cmdMatch = text.match(/^\/([a-zA-Z_-]+)/);
+			if (cmdMatch && TUI_ONLY_COMMANDS.has(cmdMatch[1].toLowerCase())) {
+				// Check if it's actually a registered extension command (takes priority)
+				const runner = (runtime.session as any)._extensionRunner;
+				const isExtCmd = runner && typeof runner.getCommand === "function" && runner.getCommand(cmdMatch[1].toLowerCase());
+				if (!isExtCmd) {
+					this.broadcast(sessionId, { type: "ui_notify", message: `/${cmdMatch[1]} is not available in pi-mobile. Use the UI controls instead.`, level: "warning" });
+					return;
+				}
+			}
+
+			const promptOptions = images.length > 0 ? { images } : undefined;
+			const wasStreaming = runtime.session.isStreaming;
+			await runtime.session.prompt(
+				text,
+				wasStreaming
+					? { ...(promptOptions ?? {}), streamingBehavior: command.deliverAs ?? "followUp" }
+					: promptOptions,
+			);
+			// If prompt returned without starting an agent run (e.g. extension
+			// commands), broadcast a state patch so the frontend can update.
+			if (!runtime.session.isStreaming) {
+				this.broadcast(runtime.session.sessionId, { type: "state_patch", patch: buildPatch(runtime.session) });
+			}
 			return;
 		}
 
@@ -404,18 +783,13 @@ export class PiWebRuntime {
 			const provider = command.provider.trim();
 			const modelId = command.modelId.trim();
 			if (!provider || !modelId) throw new Error("invalid_model");
-			try {
-				this.authStorage.reload();
-			} catch {
-				// best effort
-			}
-			try {
-				this.modelRegistry.refresh();
-			} catch {
-				// best effort
-			}
 
-			const available = this.modelRegistry.getAvailable();
+			// Use the session's registry — it has extension-registered providers
+			const registry = runtime.session.modelRegistry ?? this.modelRegistry;
+			try { this.authStorage.reload(); } catch {}
+			try { registry.refresh(); } catch {}
+
+			const available = registry.getAvailable();
 			const model = available.find((m) => m.provider === provider && m.id === modelId);
 			if (!model) throw new Error(`model_not_available: ${provider}/${modelId}`);
 			await runtime.session.setModel(model);
@@ -468,9 +842,6 @@ export class PiWebRuntime {
 		if (!runtime) {
 			throw new Error("session_not_running");
 		}
-		if (runtime.session.isStreaming) {
-			throw new Error("cannot_takeover_while_streaming");
-		}
 		runtime.controllerClientId = request.clientId;
 		this.broadcast(sessionId, { type: "controller_changed", controllerClientId: request.clientId });
 	}
@@ -483,6 +854,7 @@ export class PiWebRuntime {
 		this.assertController(runtime, request.clientId);
 
 		this.broadcast(sessionId, { type: "released", byClientId: request.clientId });
+		this.cancelPendingDialogsForSession(sessionId);
 
 		for (const client of runtime.clients.values()) {
 			client.close();
@@ -502,6 +874,42 @@ export class PiWebRuntime {
 		this.runningById.delete(sessionId);
 		if (runtime.sessionFile) {
 			this.runningByPath.delete(runtime.sessionFile);
+		}
+	}
+
+	async stopSession(sessionId: string): Promise<void> {
+		const runtime = this.runningById.get(sessionId);
+		if (!runtime) return;
+
+		this.broadcast(sessionId, { type: "released", byClientId: "system" });
+		this.cancelPendingDialogsForSession(sessionId);
+
+		for (const client of runtime.clients.values()) {
+			client.close();
+		}
+
+		try { await runtime.session.abort(); } catch {}
+		try { runtime.session.dispose(); } catch {}
+
+		this.runningById.delete(sessionId);
+		if (runtime.sessionFile) {
+			this.runningByPath.delete(runtime.sessionFile);
+		}
+	}
+
+	async deleteSession(sessionPath: string): Promise<void> {
+		// Stop if running
+		const runningId = this.runningByPath.get(sessionPath);
+		if (runningId) {
+			await this.stopSession(runningId);
+		}
+
+		// Delete session file from disk
+		const { unlink } = await import("node:fs/promises");
+		try {
+			await unlink(sessionPath);
+		} catch {
+			// file might not exist
 		}
 	}
 
@@ -531,6 +939,19 @@ export class PiWebRuntime {
 		const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
 			runtime.modifiedAtMs = Date.now();
 			this.broadcast(sessionId, { type: "agent_event", event });
+
+			if (event.type === "message_end" && (event as any)?.message?.role === "assistant") {
+				const messageText = extractTextContent((event as any)?.message?.content).trim();
+				if (messageText && this.onMessageNotification) {
+					void this.onMessageNotification({
+						sessionId,
+						sessionName: session.sessionName,
+						cwd,
+						messageRole: "assistant",
+						messageText,
+					});
+				}
+			}
 
 			if (event.type === "agent_end" || event.type === "auto_compaction_end") {
 				this.broadcast(sessionId, { type: "state_patch", patch: buildPatch(session) });
