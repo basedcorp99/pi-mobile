@@ -123,6 +123,52 @@ function syncSessionUrl(sessionId) {
 	lastSyncedSessionUrl = normalized;
 }
 
+function extractSessionIdFromUrl(rawUrl) {
+	if (typeof rawUrl !== "string" || !rawUrl.trim()) return null;
+	try {
+		const url = new URL(rawUrl, window.location.origin);
+		const sessionId = url.searchParams.get("session")?.trim();
+		return sessionId || null;
+	} catch {
+		return null;
+	}
+}
+
+async function openSessionTarget(sessionId) {
+	const normalized = typeof sessionId === "string" && sessionId.trim() ? sessionId.trim() : null;
+	if (!normalized) return false;
+
+	try {
+		const activeData = await api.getJson("/api/active-sessions");
+		const activeSessions = Array.isArray(activeData.sessions) ? activeData.sessions : [];
+		const activeMatch = activeSessions.find((session) => session && session.id === normalized);
+		if (activeMatch) {
+			sessionCtrl.openSessionId(activeMatch.id);
+			clearAttachments();
+			updateControls();
+			return true;
+		}
+	} catch {
+		// ignore
+	}
+
+	try {
+		const allData = await api.getJson("/api/sessions");
+		const allSessions = Array.isArray(allData.sessions) ? allData.sessions : [];
+		const savedMatch = allSessions.find((session) => session && session.id === normalized);
+		if (savedMatch) {
+			await sessionCtrl.selectSession(savedMatch);
+			clearAttachments();
+			updateControls();
+			return true;
+		}
+	} catch {
+		// ignore
+	}
+
+	return false;
+}
+
 function formatTokens(n) {
 	const num = Number(n || 0);
 	if (!Number.isFinite(num) || num <= 0) return "0";
@@ -898,21 +944,25 @@ window.addEventListener("beforeunload", () => sidebarCtrl?.setOpen?.(false));
 updateFooter();
 updateControls();
 
+function installNotificationSessionOpener() {
+	if (!navigator.serviceWorker || typeof navigator.serviceWorker.addEventListener !== "function") return;
+	navigator.serviceWorker.addEventListener("message", (event) => {
+		const data = event?.data;
+		if (!data || data.type !== "open_notification_session") return;
+		const targetSessionId = typeof data.sessionId === "string" && data.sessionId.trim()
+			? data.sessionId.trim()
+			: extractSessionIdFromUrl(data.url);
+		if (!targetSessionId) return;
+		void openSessionTarget(targetSessionId);
+	});
+}
+
 async function openSessionFromParam() {
 	if (!sessionParam) return;
-	try {
-		const data = await api.getJson("/api/active-sessions");
-		const sessions = Array.isArray(data.sessions) ? data.sessions : [];
-		const match = sessions.find((s) => s && s.id === sessionParam);
-		if (match) {
-			sessionCtrl.openSessionId(match.id);
-			clearAttachments();
-			updateControls();
-		}
-	} catch {
-		// ignore
-	}
+	await openSessionTarget(sessionParam);
 }
+
+installNotificationSessionOpener();
 
 function installSidebarSwipeGestures() {
 	let tracking = null;
