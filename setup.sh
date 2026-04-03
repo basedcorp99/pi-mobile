@@ -2,10 +2,14 @@
 set -euo pipefail
 
 # pi-mobile setup
-# Installs: pi-mobile launcher to ~/.bin, optional voice model (Parakeet)
+# Installs: pi-mobile launcher to ~/.bin, systemd service, optional voice model (Parakeet)
 # Usage: ./setup.sh          (interactive)
 #        ./setup.sh --all    (install everything including voice)
 #        ./setup.sh --no-voice  (skip voice setup)
+#
+# Optional env overrides for systemd install:
+#   PI_MOBILE_HOST=127.0.0.1|100.x.x.x|0.0.0.0
+#   PI_MOBILE_PORT=4317
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BIN_DIR="$HOME/.bin"
@@ -24,6 +28,30 @@ warn()  { printf '\033[1;33m!\033[0m %s\n' "$*"; }
 err()   { printf '\033[1;31m✗\033[0m %s\n' "$*"; }
 
 APT_UPDATED=""
+
+resolve_bun_bin() {
+  if command -v bun &>/dev/null; then
+    command -v bun
+    return 0
+  fi
+
+  local candidates=(
+    "$HOME/.bun/bin/bun"
+    "/root/.bun/bin/bun"
+    "/usr/local/bin/bun"
+  )
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+BUN_BIN="$(resolve_bun_bin || true)"
 
 run_privileged() {
   if [[ "$(id -u)" -eq 0 ]]; then
@@ -95,16 +123,16 @@ ensure_fuzzy_search_tools() {
 }
 
 # ── 1. Check bun ─────────────────────────────────────────────────
-if ! command -v bun &>/dev/null; then
+if [[ -z "$BUN_BIN" ]]; then
   err "bun is required but not found. Install it: https://bun.sh"
   exit 1
 fi
-ok "bun found: $(bun --version)"
+ok "bun found: $($BUN_BIN --version)"
 
 # ── 2. Install deps ──────────────────────────────────────────────
 info "Installing dependencies..."
 cd "$SCRIPT_DIR"
-bun install --frozen-lockfile 2>/dev/null || bun install
+"$BUN_BIN" install --frozen-lockfile 2>/dev/null || "$BUN_BIN" install
 ok "Dependencies installed"
 
 # ── 3. Check for pi + pi-subagents ────────────────────────────────
@@ -188,15 +216,70 @@ if [[ "${1:-}" == "--help" ]]; then
 fi
 
 cd "$PIMOBILE_DIR"
-exec bun src/server.ts "$@"
+exec __BUN_BIN__ src/server.ts "$@"
 LAUNCHER
 
 # Patch in the actual directory
 sed -i "s|__SCRIPT_DIR__|$SCRIPT_DIR|g" "$BIN_DIR/pi-mobile"
+sed -i "s|__BUN_BIN__|$BUN_BIN|g" "$BIN_DIR/pi-mobile"
 chmod +x "$BIN_DIR/pi-mobile"
 ok "Installed pi-mobile launcher → $BIN_DIR/pi-mobile"
 
-# ── 7. Add ~/.bin to PATH + shell hooks if needed ─────────────────
+# ── 7. Install systemd service ────────────────────────────────────
+install_systemd_service() {
+  if ! command -v systemctl &>/dev/null; then
+    warn "systemctl not found — skipping systemd service install"
+    return 0
+  fi
+
+  local service_template="$SCRIPT_DIR/systemd/pi-mobile.service"
+  if [[ ! -f "$service_template" ]]; then
+    warn "Service template not found at $service_template"
+    return 1
+  fi
+
+  local host="${PI_MOBILE_HOST:-}"
+  if [[ -z "$host" ]] && command -v tailscale &>/dev/null; then
+    host="$(tailscale ip -4 2>/dev/null | head -n1 || true)"
+  fi
+  if [[ -z "$host" ]]; then
+    host="127.0.0.1"
+  fi
+
+  local port="${PI_MOBILE_PORT:-4317}"
+  local bun_bin="$BUN_BIN"
+  if [[ -z "$bun_bin" ]]; then
+    warn "bun not found — skipping systemd service install"
+    return 1
+  fi
+
+  local tmp_service
+  tmp_service="$(mktemp)"
+  sed \
+    -e "s|__USER__|$USER|g" \
+    -e "s|__HOME__|$HOME|g" \
+    -e "s|__WORKDIR__|$SCRIPT_DIR|g" \
+    -e "s|__BUN__|$bun_bin|g" \
+    -e "s|__HOST__|$host|g" \
+    -e "s|__PORT__|$port|g" \
+    "$service_template" > "$tmp_service"
+
+  if ! run_privileged install -D -m 0644 "$tmp_service" /etc/systemd/system/pi-mobile.service; then
+    rm -f "$tmp_service"
+    warn "Need sudo/root to install /etc/systemd/system/pi-mobile.service"
+    return 1
+  fi
+  rm -f "$tmp_service"
+
+  run_privileged systemctl daemon-reload
+  run_privileged systemctl enable --now pi-mobile.service
+  ok "Installed systemd service → /etc/systemd/system/pi-mobile.service"
+  ok "Service enabled + started (host=$host port=$port)"
+}
+
+install_systemd_service || warn "Systemd service install failed — you can still run pi-mobile manually"
+
+# ── 8. Add ~/.bin to PATH + shell hooks if needed ─────────────────
 ensure_shell_line() {
   local shell_rc="$1"
   local match="$2"
@@ -253,7 +336,7 @@ if command -v zoxide &>/dev/null; then
   ok "zoxide ready"
 fi
 
-# ── 8. Voice transcription (Parakeet) ────────────────────────────
+# ── 9. Voice transcription (Parakeet) ────────────────────────────
 PARAKEET_BIN="$BIN_DIR/parakeet-transcribe"
 PARAKEET_MODEL_DIR="$HOME/.local/share/parakeet-tdt-0.6b-v3-int8"
 PARAKEET_URL="https://blob.handy.computer/parakeet-v3-int8.tar.gz"
@@ -337,13 +420,15 @@ else
   fi
 fi
 
-# ── 9. Summary ────────────────────────────────────────────────────
+# ── 10. Summary ───────────────────────────────────────────────────
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 ok "Setup complete!"
 echo ""
-echo "  Run:  pi-mobile"
-echo "  Or:   pi-mobile --host \$(tailscale ip -4) --port 4317"
+echo "  Run:      pi-mobile"
+echo "  Service:  sudo systemctl restart pi-mobile"
+echo "  Logs:     journalctl -u pi-mobile -f"
+echo "  Override: PI_MOBILE_HOST=127.0.0.1 PI_MOBILE_PORT=4317 ./setup.sh"
 echo ""
 if [[ ! -f "$PARAKEET_BIN" ]]; then
   echo "  Voice: not installed (run ./setup.sh --all to add)"

@@ -2,15 +2,46 @@
 
 ## Setup and extension notes
 
-`./setup.sh` installs two separate things:
+`./setup.sh` installs three separate things:
 
 - the `pi-mobile` launcher in `~/.bin/pi-mobile`
+- the `pi-mobile` systemd unit in `/etc/systemd/system/pi-mobile.service`
 - the custom `/review` Pi extension in `~/.pi/agent/extensions/review.ts`
 
 The `/review` extension source lives in this repo at `pi-extension/review.ts`, but it is meant to be copied into Pi's normal extension directory.
 Do **not** add the `pi-mobile` repo URL to Pi's `packages` list just to get `/review` loaded; that makes Pi try to load the extension straight from the cloned repo path.
 
 If you change `pi-extension/review.ts`, rerun `./setup.sh` to reinstall the copied extension.
+
+## systemd service
+
+The repo-owned unit file lives at [`systemd/pi-mobile.service`](./systemd/pi-mobile.service).
+`./setup.sh` templates it with your current user, Bun path, repo path, host, and port, then installs it to `/etc/systemd/system/pi-mobile.service`.
+
+Host selection during setup:
+- `PI_MOBILE_HOST` if set
+- otherwise `tailscale ip -4` if available
+- otherwise `127.0.0.1`
+
+Port selection during setup:
+- `PI_MOBILE_PORT` if set
+- otherwise `4317`
+
+Common commands:
+
+```bash
+sudo systemctl status pi-mobile
+sudo systemctl restart pi-mobile
+journalctl -u pi-mobile -f
+```
+
+Reinstall the unit with different bind settings:
+
+```bash
+PI_MOBILE_HOST=127.0.0.1 PI_MOBILE_PORT=4317 ./setup.sh
+```
+
+---
 
 ## Local only
 
@@ -26,6 +57,13 @@ Open `http://localhost:4317`. No token needed on loopback.
 ## Remote access via Tailscale
 
 Bind to your Tailscale IP (the `100.x.x.x` address from `tailscale ip -4`):
+
+```bash
+PI_MOBILE_HOST=$(tailscale ip -4 | head -n1) ./setup.sh
+sudo systemctl restart pi-mobile
+```
+
+Or run manually:
 
 ```bash
 bun run dev -- --host 100.X.X.X --port 4317

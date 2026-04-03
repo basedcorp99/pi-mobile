@@ -1,0 +1,17 @@
+[Unit]
+Description=pi-mobile web UI
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__WORKDIR__
+ExecStart=__BUN__ src/server.ts --host __HOST__ --port __PORT__
+Restart=always
+RestartSec=3
+Environment=HOME=__HOME__
+Environment=PI_WEB_HOST=__HOST__
+
+[Install]
+WantedBy=multi-user.target

@@ -27,6 +27,8 @@ cd pi-mobile
 The setup script:
 - Installs bun dependencies
 - Creates a `pi-mobile` launcher in `~/.bin` and adds it to PATH
+- Installs a repo-owned systemd unit at `/etc/systemd/system/pi-mobile.service`
+- Enables + starts the `pi-mobile` service
 - Installs the custom `/review` Pi extension to `~/.pi/agent/extensions/review.ts`
 - Optionally installs voice transcription (Parakeet model, ~640MB)
 
@@ -36,12 +38,23 @@ The `/review` extension source lives in `pi-extension/review.ts` and is copied i
 After setup:
 
 ```bash
-pi-mobile                              # localhost:4317
-pi-mobile --host $(tailscale ip -4)    # tailscale
-pi-mobile --host 0.0.0.0 --port 8080  # public (use --token)
+pi-mobile                              # manual run
+sudo systemctl restart pi-mobile       # managed service restart
+journalctl -u pi-mobile -f             # live logs
 ```
 
-See [RUNBOOK.md](./RUNBOOK.md) for Tailscale / Cloudflare / TLS / auth details, plus notes on the installed `/review` extension.
+By default, `./setup.sh` installs the systemd service using:
+- `PI_MOBILE_HOST` if set
+- otherwise your Tailscale IPv4 if available
+- otherwise `127.0.0.1`
+
+You can override service bind settings during setup:
+
+```bash
+PI_MOBILE_HOST=127.0.0.1 PI_MOBILE_PORT=4317 ./setup.sh
+```
+
+See [RUNBOOK.md](./RUNBOOK.md) for systemd, Tailscale / Cloudflare / TLS / auth details, plus notes on the installed `/review` extension.
 
 ## Prerequisites
 
