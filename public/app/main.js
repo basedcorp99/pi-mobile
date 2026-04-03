@@ -487,6 +487,7 @@ const sessionCtrl = createSessionController({
 		syncSessionUrl(sessionCtrl.getActiveSessionId());
 		updateFooter();
 		updateControls();
+		void pushCtrl?.syncActivity?.();
 	},
 	onCloseMenu: () => {
 		if (menuOverlay?.dataset?.locked === "1") return;
@@ -639,6 +640,8 @@ pushCtrl = installPushNotifications({
 	api,
 	btnNotify,
 	lblNotify,
+	clientId,
+	getActiveSessionId: () => sessionCtrl.getActiveSessionId(),
 	onNotice: sessionCtrl.appendNotice,
 });
 void pushCtrl.start();

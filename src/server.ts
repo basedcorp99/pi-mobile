@@ -279,8 +279,8 @@ const runtime = new PiWebRuntime({
 			sessionName: payload.sessionName,
 			tag: payload.sessionId,
 		});
-		if (result.sent > 0 || result.failed > 0) {
-			console.log(`[push] sent=${result.sent} failed=${result.failed} title="${title}"`);
+		if (result.sent > 0 || result.failed > 0 || result.suppressed) {
+			console.log(`[push] sent=${result.sent} failed=${result.failed} suppressed=${result.suppressed ? 1 : 0} client=${result.targetClientId || "-"} reason=${result.reason} title="${title}"`);
 		}
 	},
 });
@@ -715,9 +715,41 @@ Bun.serve({
 		}
 
 		if (req.method === "POST" && url.pathname === "/api/push/subscribe") {
-			const raw = (await requireJsonBody(req)) as { subscription?: unknown };
+			const raw = (await requireJsonBody(req)) as {
+				subscription?: unknown;
+				clientId?: unknown;
+				userAgent?: unknown;
+				platform?: unknown;
+			};
 			try {
-				return json(await pushService.subscribe(raw.subscription as PushSubscriptionJSON), 200);
+				return json(await pushService.subscribe(raw.subscription as PushSubscriptionJSON, {
+					clientId: typeof raw.clientId === "string" ? raw.clientId : undefined,
+					userAgent: typeof raw.userAgent === "string" ? raw.userAgent : undefined,
+					platform: typeof raw.platform === "string" ? raw.platform : undefined,
+				}), 200);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return errorResponse(message, 400);
+			}
+		}
+
+		if (req.method === "POST" && url.pathname === "/api/push/activity") {
+			const raw = (await requireJsonBody(req)) as {
+				clientId?: unknown;
+				sessionId?: unknown;
+				visible?: unknown;
+				focused?: unknown;
+			};
+			if (typeof raw?.clientId !== "string" || !raw.clientId.trim()) {
+				return errorResponse("Missing clientId", 400);
+			}
+			try {
+				return json(pushService.updateClientActivity({
+					clientId: raw.clientId.trim(),
+					sessionId: typeof raw.sessionId === "string" ? raw.sessionId : null,
+					visible: Boolean(raw.visible),
+					focused: Boolean(raw.focused),
+				}), 200);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				return errorResponse(message, 400);

@@ -17,10 +17,86 @@ function canUsePush() {
 	);
 }
 
-export function installPushNotifications({ api, btnNotify, lblNotify, onNotice }) {
+export function installPushNotifications({ api, btnNotify, lblNotify, onNotice, clientId, getActiveSessionId }) {
 	let registration = null;
 	let subscribed = false;
 	let supported = canUsePush();
+	let activityTimer = null;
+	let activityTrackingStarted = false;
+	let lastActivityKey = "";
+	let lastActivitySentAt = 0;
+	let windowFocused = typeof document !== "undefined" && typeof document.hasFocus === "function" ? document.hasFocus() : true;
+
+	function getSubscriptionMeta() {
+		return {
+			clientId,
+			userAgent: typeof navigator !== "undefined" ? navigator.userAgent || "" : "",
+			platform:
+				typeof navigator !== "undefined"
+					? navigator.userAgentData?.platform || navigator.platform || ""
+					: "",
+		};
+	}
+
+	function buildActivityPayload() {
+		return {
+			clientId,
+			sessionId: getActiveSessionId?.() || null,
+			visible: typeof document !== "undefined" ? document.visibilityState === "visible" : true,
+			focused: Boolean(windowFocused),
+		};
+	}
+
+	async function syncActivity(options = {}) {
+		if (!clientId) return false;
+		const payload = buildActivityPayload();
+		const now = Date.now();
+		const key = JSON.stringify(payload);
+		if (!options.force && key === lastActivityKey && now - lastActivitySentAt < 4_000) {
+			return true;
+		}
+		try {
+			await api.postJson("/api/push/activity", payload, options.keepalive ? { keepalive: true } : {});
+			lastActivityKey = key;
+			lastActivitySentAt = now;
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	function startActivityTracking() {
+		if (activityTrackingStarted) return;
+		activityTrackingStarted = true;
+
+		document.addEventListener("visibilitychange", () => {
+			if (document.visibilityState === "hidden") windowFocused = false;
+			else if (typeof document.hasFocus === "function") windowFocused = document.hasFocus();
+			void syncActivity({ force: true, keepalive: document.visibilityState === "hidden" });
+		});
+		window.addEventListener("focus", () => {
+			windowFocused = true;
+			void syncActivity({ force: true });
+		});
+		window.addEventListener("blur", () => {
+			windowFocused = false;
+			void syncActivity({ force: true });
+		});
+		window.addEventListener("pageshow", () => {
+			if (typeof document.hasFocus === "function") windowFocused = document.hasFocus();
+			void syncActivity({ force: true });
+		});
+		window.addEventListener("pagehide", () => {
+			windowFocused = false;
+			void syncActivity({ force: true, keepalive: true });
+		});
+
+		activityTimer = setInterval(() => {
+			const visible = typeof document !== "undefined" ? document.visibilityState === "visible" : true;
+			if (!visible && !windowFocused) return;
+			void syncActivity();
+		}, 5_000);
+	}
 
 	function setButtonState() {
 		if (!btnNotify) return;
@@ -39,7 +115,7 @@ export function installPushNotifications({ api, btnNotify, lblNotify, onNotice }
 	async function ensureRegistration() {
 		if (!supported) return null;
 		if (registration) return registration;
-		registration = await navigator.serviceWorker.register("/sw.js?v=20260403a", { scope: "/" });
+		registration = await navigator.serviceWorker.register("/sw.js?v=20260403f", { scope: "/" });
 		return registration;
 	}
 
@@ -52,7 +128,6 @@ export function installPushNotifications({ api, btnNotify, lblNotify, onNotice }
 			return false;
 		}
 
-		// Check if the subscription's applicationServerKey matches the current server key
 		try {
 			const { publicKey } = await api.getJson("/api/push/public-key");
 			const currentKey = existing.options?.applicationServerKey;
@@ -60,13 +135,12 @@ export function installPushNotifications({ api, btnNotify, lblNotify, onNotice }
 				const keyBytes = new Uint8Array(currentKey);
 				const expectedBytes = base64ToUint8Array(publicKey);
 				if (keyBytes.length !== expectedBytes.length || !keyBytes.every((b, i) => b === expectedBytes[i])) {
-					// VAPID key mismatch — unsubscribe and resubscribe
 					await existing.unsubscribe().catch(() => {});
 					const newSub = await registration.pushManager.subscribe({
 						userVisibleOnly: true,
 						applicationServerKey: expectedBytes,
 					});
-					await api.postJson("/api/push/subscribe", { subscription: newSub.toJSON() });
+					await api.postJson("/api/push/subscribe", { subscription: newSub.toJSON(), ...getSubscriptionMeta() });
 					subscribed = true;
 					setButtonState();
 					return true;
@@ -76,7 +150,7 @@ export function installPushNotifications({ api, btnNotify, lblNotify, onNotice }
 			// If key check fails, proceed with normal sync
 		}
 
-		await api.postJson("/api/push/subscribe", { subscription: existing.toJSON() });
+		await api.postJson("/api/push/subscribe", { subscription: existing.toJSON(), ...getSubscriptionMeta() });
 		subscribed = true;
 		setButtonState();
 		return true;
@@ -106,7 +180,6 @@ export function installPushNotifications({ api, btnNotify, lblNotify, onNotice }
 
 		let sub = await reg.pushManager.getSubscription();
 		if (sub) {
-			// Check for VAPID key mismatch
 			const currentKey = sub.options?.applicationServerKey;
 			if (currentKey) {
 				const keyBytes = new Uint8Array(currentKey);
@@ -123,7 +196,7 @@ export function installPushNotifications({ api, btnNotify, lblNotify, onNotice }
 			});
 		}
 
-		await api.postJson("/api/push/subscribe", { subscription: sub.toJSON() });
+		await api.postJson("/api/push/subscribe", { subscription: sub.toJSON(), ...getSubscriptionMeta() });
 		subscribed = true;
 		setButtonState();
 		onNotice?.("Push notifications enabled.", "info");
@@ -188,13 +261,14 @@ export function installPushNotifications({ api, btnNotify, lblNotify, onNotice }
 	async function start() {
 		supported = canUsePush();
 		setButtonState();
+		startActivityTracking();
+		void syncActivity({ force: true });
 		if (!supported) return;
 		try {
 			await ensureRegistration();
 			if (Notification.permission === "granted") {
 				const synced = await syncSubscriptionWithServer();
 				if (!synced) {
-					// Permission granted but no subscription — auto-subscribe
 					await subscribe();
 				}
 			} else {
@@ -217,6 +291,7 @@ export function installPushNotifications({ api, btnNotify, lblNotify, onNotice }
 		toggle,
 		subscribe,
 		disable: unsubscribe,
+		syncActivity,
 		isSupported: () => supported,
 		isSubscribed: () => subscribed,
 	};

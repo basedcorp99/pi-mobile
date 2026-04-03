@@ -12,11 +12,12 @@ export function createApi(token) {
 		return body;
 	}
 
-	async function postJson(path, payload) {
+	async function postJson(path, payload, options = {}) {
 		const res = await fetch(path, {
 			method: "POST",
 			headers: headers(),
 			body: JSON.stringify(payload),
+			...options,
 		});
 		const body = await res.json().catch(() => ({}));
 		if (!res.ok) throw new Error(body.error || `${res.status} ${res.statusText}`);
