@@ -30,6 +30,7 @@ export interface ApiSessionCommand {
 	name: string;
 	description?: string;
 	source: "extension" | "prompt" | "skill";
+	executeImmediately?: boolean;
 }
 
 export interface ApiAddRepoRequest {

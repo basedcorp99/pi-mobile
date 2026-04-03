@@ -20,6 +20,7 @@ import { createMenu } from "./ui/menu.js";
 import { createAskDialog } from "./ui/ask_dialog.js";
 import { createUiPromptDialog } from "./ui/ui_prompt_dialog.js";
 import { createAgentLauncher } from "./ui/agent_launcher.js";
+import { createReviewLauncher } from "./ui/review_launcher.js";
 import { createSidebar } from "./ui/sidebar.js";
 
 const sessionsList = document.getElementById("sessions-list");
@@ -108,6 +109,7 @@ let menuCtrl = null;
 let askDialog = null;
 let uiPromptDialog = null;
 let agentLauncher = null;
+let reviewLauncher = null;
 let pendingAttachments = [];
 
 function syncSessionUrl(sessionId) {
@@ -564,8 +566,14 @@ menuCtrl = createMenu({
 		autoResize(input);
 		input.focus();
 	},
+	onExecuteCommand: async (value) => {
+		await sessionCtrl.sendPrompt(value);
+	},
 	onRunAgent: () => {
 		if (agentLauncher) agentLauncher.show();
+	},
+	onRunReview: () => {
+		if (reviewLauncher) reviewLauncher.show();
 	},
 });
 
@@ -573,6 +581,10 @@ askDialog = createAskDialog({ menuOverlay, menuScrim, menuPanel });
 uiPromptDialog = createUiPromptDialog({ menuOverlay, menuScrim, menuPanel });
 agentLauncher = createAgentLauncher({
 	menuOverlay, menuPanel, api,
+	onSubmit: (cmd) => void sessionCtrl.sendPrompt(cmd),
+});
+reviewLauncher = createReviewLauncher({
+	menuOverlay, menuPanel,
 	onSubmit: (cmd) => void sessionCtrl.sendPrompt(cmd),
 });
 
@@ -794,7 +806,7 @@ if (btnCommands) {
 	btnCommands.addEventListener("mousedown", (e) => e.preventDefault());
 	btnCommands.addEventListener("click", () => {
 		if (document.activeElement === input) input.blur();
-		setTimeout(() => agentLauncher?.show?.(), 50);
+		setTimeout(() => menuCtrl?.openCommandsMenu?.(), 50);
 	});
 }
 

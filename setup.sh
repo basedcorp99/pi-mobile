@@ -55,10 +55,36 @@ check_install_global() {
 check_install_global pi @mariozechner/pi-coding-agent
 check_install_global pi-subagents pi-subagents
 
+# Ensure pi-ask-tool-extension is available for the custom /review extension.
+ASK_EXT_ROOT="$(npm root -g 2>/dev/null || true)"
+if [[ -n "$ASK_EXT_ROOT" && -d "$ASK_EXT_ROOT/pi-ask-tool-extension" ]]; then
+  ok "pi-ask-tool-extension found: $ASK_EXT_ROOT/pi-ask-tool-extension"
+else
+  info "pi-ask-tool-extension not found — installing globally..."
+  npm install -g pi-ask-tool-extension
+  ASK_EXT_ROOT="$(npm root -g 2>/dev/null || true)"
+  if [[ -n "$ASK_EXT_ROOT" && -d "$ASK_EXT_ROOT/pi-ask-tool-extension" ]]; then
+    ok "pi-ask-tool-extension installed successfully"
+  else
+    warn "pi-ask-tool-extension install may have succeeded but could not be verified"
+  fi
+fi
+
 # ── 4. Create ~/.bin ──────────────────────────────────────────────
 mkdir -p "$BIN_DIR"
 
-# ── 5. Create pi-mobile launcher ─────────────────────────────────
+# ── 5. Install custom /review Pi extension ───────────────────────
+REVIEW_EXT_SRC="$SCRIPT_DIR/extensions/review.ts"
+REVIEW_EXT_DST="$HOME/.pi/agent/extensions/review.ts"
+mkdir -p "$(dirname "$REVIEW_EXT_DST")"
+if [[ -f "$REVIEW_EXT_SRC" ]]; then
+  sed "s|__PI_ASK_EXT_ROOT__|$ASK_EXT_ROOT|g" "$REVIEW_EXT_SRC" > "$REVIEW_EXT_DST"
+  ok "Installed custom /review extension → $REVIEW_EXT_DST"
+else
+  warn "Custom /review extension source not found at $REVIEW_EXT_SRC"
+fi
+
+# ── 6. Create pi-mobile launcher ─────────────────────────────────
 cat > "$BIN_DIR/pi-mobile" << 'LAUNCHER'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -94,7 +120,7 @@ sed -i "s|__SCRIPT_DIR__|$SCRIPT_DIR|g" "$BIN_DIR/pi-mobile"
 chmod +x "$BIN_DIR/pi-mobile"
 ok "Installed pi-mobile launcher → $BIN_DIR/pi-mobile"
 
-# ── 6. Add ~/.bin to PATH if needed ──────────────────────────────
+# ── 7. Add ~/.bin to PATH if needed ──────────────────────────────
 add_to_path() {
   local shell_rc="$1"
   local line='export PATH="$HOME/.bin:$PATH"'
@@ -125,7 +151,7 @@ else
   ok "~/.bin already in PATH"
 fi
 
-# ── 7. Voice transcription (Parakeet) ────────────────────────────
+# ── 8. Voice transcription (Parakeet) ────────────────────────────
 PARAKEET_BIN="$BIN_DIR/parakeet-transcribe"
 PARAKEET_MODEL_DIR="$HOME/.local/share/parakeet-tdt-0.6b-v3-int8"
 PARAKEET_URL="https://blob.handy.computer/parakeet-v3-int8.tar.gz"
@@ -209,7 +235,7 @@ else
   fi
 fi
 
-# ── 8. Summary ────────────────────────────────────────────────────
+# ── 9. Summary ────────────────────────────────────────────────────
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 ok "Setup complete!"

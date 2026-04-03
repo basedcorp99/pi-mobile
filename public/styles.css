@@ -270,6 +270,8 @@
 	      border: 1px solid transparent;
 	    }
 	    .menu-item:hover { background: #1e1e28; }
+	    .menu-item.disabled { opacity: .55; cursor: not-allowed; }
+	    .menu-item.disabled:hover { background: transparent; }
 	    .menu-item.active { background: #1e2a20; border-color: #2a3a2a; }
 	    .menu-item .primary { color: #d4d4d4; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 	    .menu-item .secondary { color: #666666; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
@@ -1357,6 +1359,7 @@
     body.light .menu-mini:hover { background: #e0e0da; color: #2a2a2a; }
     body.light .menu-search { background: #fff; border-color: #d0d0ca; color: #2a2a2a; }
     body.light .menu-item:hover { background: #e8e8e2; }
+    body.light .menu-item.disabled:hover { background: transparent; }
     body.light .menu-item.active { background: #e0f0e2; border-color: #b0d8b0; }
     body.light .menu-item .primary { color: #2a2a2a; }
     body.light .menu-item .secondary { color: #888; }

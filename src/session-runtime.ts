@@ -202,6 +202,7 @@ function safeCommandsSnapshot(session: AgentSession): ApiSessionCommand[] {
 						name,
 						description: typeof cmd?.description === "string" ? cmd.description.trim() || undefined : undefined,
 						source: "extension",
+						executeImmediately: Boolean((cmd as { executeImmediately?: unknown })?.executeImmediately),
 					});
 				}
 			}

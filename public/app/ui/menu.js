@@ -26,6 +26,58 @@ function fuzzyMatch(query, hay) {
 	return tokens.every((t) => h.includes(t) || fuzzyCharsMatch(t, h));
 }
 
+export function getCommandMenuEntries(commands) {
+	const review = Array.isArray(commands)
+		? commands.find((cmd) => cmd && typeof cmd === "object" && String(cmd.name || "").toLowerCase() === "review") || null
+		: null;
+	return [
+		{ key: "agents", title: "subagents", description: "Open the subagents modal", kind: "agents" },
+		{
+			key: "review",
+			title: "review",
+			description: review?.description || "Start an interactive code review",
+			kind: "review",
+			command: review,
+			disabled: !review,
+		},
+	];
+}
+
+export async function handleCommandMenuAction({ entry, state, onExecuteCommand, onInsertCommand, onNotice }) {
+	if (!entry || entry.disabled) return { ok: false, reason: "disabled" };
+
+	if (entry.kind === "agents") {
+		return { ok: true, action: "agents" };
+	}
+	if (entry.kind === "review") {
+		return { ok: true, action: "review" };
+	}
+
+	const cmd = entry.command;
+	if (!cmd) return { ok: false, reason: "missing-command" };
+
+	if (!cmd.executeImmediately) {
+		if (typeof onInsertCommand === "function") onInsertCommand(`/${cmd.name} `);
+		return { ok: true, action: "insert", command: cmd.name };
+	}
+
+	if (state.executingCommand) {
+		return { ok: false, reason: "busy", command: state.executingCommand };
+	}
+
+	state.executingCommand = cmd.name;
+	try {
+		if (typeof onExecuteCommand === "function") await onExecuteCommand(`/${cmd.name}`);
+		return { ok: true, action: "execute", command: cmd.name };
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		if (typeof onNotice === "function") onNotice(message, "error");
+		return { ok: false, reason: "error", message };
+	} finally {
+		state.executingCommand = null;
+	}
+}
+
 export function createMenu({
 	menuOverlay,
 	menuScrim,
@@ -48,7 +100,9 @@ export function createMenu({
 	onSetSteeringMode,
 	onSetFollowUpMode,
 	onInsertCommand,
+	onExecuteCommand,
 	onRunAgent,
+	onRunReview,
 }) {
 	let open = false;
 	let cachedModels = null;
@@ -299,12 +353,13 @@ export function createMenu({
 
 	function openCommandsMenu() {
 		if (!btnCommands || btnCommands.disabled) return;
+		const state = { executingCommand: null };
 		openMenu(btnCommands, (panel) => {
 			const hdr = document.createElement("div");
 			hdr.className = "menu-hdr";
 			const title = document.createElement("div");
 			title.className = "menu-title";
-			title.textContent = "Commands";
+			title.textContent = "/Cmd";
 			const closeBtn = document.createElement("button");
 			closeBtn.className = "menu-mini";
 			closeBtn.textContent = "Close";
@@ -314,78 +369,57 @@ export function createMenu({
 
 			const body = document.createElement("div");
 			body.className = "menu-body";
-
-			const search = document.createElement("input");
-			search.className = "menu-search";
-			search.placeholder = "Search commands…";
-
 			const list = document.createElement("div");
 			list.className = "menu-list";
-			list.textContent = "Loading…";
 
 			const render = () => {
 				list.innerHTML = "";
 				const activeState = getActiveState();
 				const commands = Array.isArray(activeState?.commands) ? activeState.commands : [];
-				const q = search.value.trim().toLowerCase();
-				const filtered = commands.filter((cmd) => {
-					const hay = `${cmd.name} ${cmd.description || ""} ${cmd.source}`.toLowerCase();
-					return !q || hay.includes(q);
-				});
-				const shown = filtered.slice(0, 250);
-				if (shown.length === 0) {
-					const empty = document.createElement("div");
-					empty.className = "si-meta";
-					empty.textContent = commands.length === 0 ? "No commands available." : "No matches.";
-					list.appendChild(empty);
-					return;
-				}
-				for (const cmd of shown) {
+				const entries = getCommandMenuEntries(commands);
+				for (const entry of entries) {
 					const item = document.createElement("div");
-					item.className = "menu-item";
+					item.className = `menu-item${entry.disabled ? " disabled" : ""}`;
+					if (state.executingCommand && entry.kind === "command" && entry.command?.name === state.executingCommand) {
+						item.classList.add("active");
+					}
 					const primary = document.createElement("div");
 					primary.className = "primary";
-					primary.textContent = `/${cmd.name}`;
+					primary.textContent = state.executingCommand && entry.kind === "command" && entry.command?.name === state.executingCommand
+						? `${entry.title}…`
+						: entry.title;
 					const secondary = document.createElement("div");
 					secondary.className = "secondary";
-					secondary.textContent = `${cmd.source}${cmd.description ? ` • ${cmd.description}` : ""}`;
+					secondary.textContent = entry.disabled
+						? "Unavailable in this session"
+						: state.executingCommand && entry.kind === "command" && entry.command?.name === state.executingCommand
+							? "Starting…"
+							: entry.description;
 					item.appendChild(primary);
 					item.appendChild(secondary);
-					item.addEventListener("click", () => {
-						if (typeof onInsertCommand === "function") {
-							onInsertCommand(`/${cmd.name} `);
+					item.addEventListener("click", async () => {
+						const result = await handleCommandMenuAction({ entry, state, onExecuteCommand, onInsertCommand, onNotice });
+						if (result.ok) {
+							close();
+							if (result.action === "agents") {
+								setTimeout(() => { if (typeof onRunAgent === "function") onRunAgent(); }, 0);
+								return;
+							}
+							if (result.action === "review") {
+								setTimeout(() => { if (typeof onRunReview === "function") onRunReview(); }, 0);
+								return;
+							}
 						}
-						close();
+						render();
 					});
 					list.appendChild(item);
 				}
 			};
 
-			// Agent launcher button
-			const agentBtn = document.createElement("div");
-			agentBtn.className = "menu-item";
-			agentBtn.style.cssText = "border-bottom:1px solid #2a2a2e;margin-bottom:4px;padding-bottom:8px;";
-			const agentPrimary = document.createElement("div");
-			agentPrimary.className = "primary";
-			agentPrimary.textContent = "🤖 Run Agent";
-			const agentSecondary = document.createElement("div");
-			agentSecondary.className = "secondary";
-			agentSecondary.textContent = "Pick an agent and run a task";
-			agentBtn.appendChild(agentPrimary);
-			agentBtn.appendChild(agentSecondary);
-			agentBtn.addEventListener("click", () => {
-				close();
-				if (typeof onRunAgent === "function") onRunAgent();
-			});
-
-			search.addEventListener("input", render);
-			body.appendChild(agentBtn);
-			body.appendChild(search);
 			body.appendChild(list);
 			panel.appendChild(hdr);
 			panel.appendChild(body);
 			render();
-			search.focus();
 		});
 	}
 

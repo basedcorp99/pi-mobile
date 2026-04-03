@@ -4,6 +4,7 @@ import { toolResultToText } from "../core/tool_format.js";
 import { renderMarkdown } from "../render/markdown.js";
 import { extractTextContent, parseAssistantContent } from "./content.js";
 import { parseSubagentSlashMessage } from "./subagent_slash.js";
+import { parseReviewSummaryMessage } from "./review_summary.js";
 import { createToolBoxManager } from "./tool_boxes.js";
 
 function normalizeUserContent(content) {
@@ -89,6 +90,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 	let optimisticUserSummaries = [];
 	let recentUserFingerprints = [];
 	let subagentCards = new Map();
+	let reviewCards = new Map();
 	let suppressAutoScroll = false;
 	let autoStickToBottom = true;
 	let internalScroll = false;
@@ -150,6 +152,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 		optimisticUserSummaries = [];
 		recentUserFingerprints = [];
 		subagentCards = new Map();
+		reviewCards = new Map();
 		autoStickToBottom = true;
 	}
 
@@ -343,6 +346,37 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 		return true;
 	}
 
+	function upsertReviewCard(message) {
+		const data = parseReviewSummaryMessage(message);
+		if (!data) return false;
+
+		let entry = data.requestId ? reviewCards.get(data.requestId) : null;
+		if (!entry) {
+			const box = document.createElement("div");
+			const title = document.createElement("div");
+			title.className = "tool-title";
+			const meta = document.createElement("div");
+			meta.className = "subagent-meta";
+			const body = document.createElement("div");
+			body.className = "md subagent-body";
+			box.appendChild(title);
+			box.appendChild(meta);
+			box.appendChild(body);
+			msgsEl.appendChild(box);
+			entry = { box, title, meta, body };
+			if (data.requestId) reviewCards.set(data.requestId, entry);
+		}
+
+		entry.box.className = "tool-box success review-result";
+		entry.title.textContent = data.title;
+		entry.meta.textContent = data.summary;
+		entry.meta.style.display = data.summary ? "" : "none";
+		const stick = shouldAutoStick();
+		renderMarkdown(entry.body, data.body || "(no output)");
+		if (stick) scrollToBottom(true);
+		return true;
+	}
+
 	const tools = createToolBoxManager({ msgsEl, scrollToBottom });
 
 	function renderHistory(messages) {
@@ -370,6 +404,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 				tools.setText(toolCallId, toolName, contentText || safeStringify(m.content));
 			} else if (m.customType || m.role === "custom") {
 				if (upsertSubagentCard(m)) continue;
+				if (upsertReviewCard(m)) continue;
 				// Custom extension messages (e.g. subagent results)
 				const text = extractTextContent(m.content) || m.content || "";
 				if (text && m.display !== false) {
@@ -441,6 +476,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 			// Custom extension messages (subagent output etc.)
 			if (event.message && (event.message.customType || event.message.role === "custom")) {
 				if (upsertSubagentCard(event.message)) return;
+				if (upsertReviewCard(event.message)) return;
 				const text = extractTextContent(event.message.content) || event.message.content || "";
 				if (text && event.message.display !== false) {
 					appendNotice(typeof text === "string" ? text : safeStringify(text));
