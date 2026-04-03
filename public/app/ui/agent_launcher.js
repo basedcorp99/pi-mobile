@@ -39,7 +39,7 @@ function commandForMode(mode, steps, flags) {
 	return cmd;
 }
 
-export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit }) {
+export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit, getActiveState }) {
 	function close() {
 		if (menuOverlay) {
 			menuOverlay.classList.remove("open");
@@ -118,6 +118,19 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit }) {
 			label: model.name || model.id,
 			secondary: `${model.provider}/${model.id}`,
 		})));
+		const describeModelValue = (value) => {
+			const selected = models.find((model) => model.value === value);
+			if (selected) return `${selected.label} · ${selected.secondary}`;
+			return value || "Unknown model";
+		};
+		const describeSessionModel = () => {
+			const sessionModel = getActiveState?.()?.model || null;
+			if (!sessionModel) return "Session default model";
+			const value = `${sessionModel.provider}/${sessionModel.id}`;
+			const selected = models.find((model) => model.value === value);
+			if (selected) return `${selected.label} · ${selected.secondary}`;
+			return `${sessionModel.name ? `${sessionModel.name} · ` : ""}${value}`;
+		};
 
 		if (agents.length === 0) {
 			body.textContent = "No subagents found.";
@@ -155,7 +168,7 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit }) {
 			select.className = "agent-launcher-select";
 			const defaultOption = document.createElement("option");
 			defaultOption.value = "";
-			defaultOption.textContent = "Session default model";
+			defaultOption.textContent = `Session default · ${describeSessionModel()}`;
 			select.appendChild(defaultOption);
 			for (const model of models) {
 				const option = document.createElement("option");
@@ -221,16 +234,39 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit }) {
 				const grid = document.createElement("div");
 				grid.className = "agent-launcher-grid";
 
+				const meta = document.createElement("div");
+				meta.className = "agent-launcher-meta";
+				const updateMeta = () => {
+					const agentInfo = agents.find((item) => item.name === step.agent);
+					const lines = [];
+					if (agentInfo?.description) lines.push(agentInfo.description);
+					lines.push(step.model ? `Uses override model: ${describeModelValue(step.model)}` : `Uses session default model: ${describeSessionModel()}`);
+					meta.innerHTML = "";
+					for (const line of lines) {
+						const row = document.createElement("div");
+						row.textContent = line;
+						meta.appendChild(row);
+					}
+				};
+
 				const agentField = document.createElement("label");
 				agentField.className = "agent-launcher-field";
 				agentField.appendChild(Object.assign(document.createElement("span"), { className: "agent-launcher-label", textContent: "Agent" }));
-				agentField.appendChild(buildAgentSelect(step.agent, (value) => { step.agent = value; }));
+				agentField.appendChild(buildAgentSelect(step.agent, (value) => {
+					step.agent = value;
+					updateMeta();
+					updatePreview();
+				}));
 				grid.appendChild(agentField);
 
 				const modelField = document.createElement("label");
 				modelField.className = "agent-launcher-field";
 				modelField.appendChild(Object.assign(document.createElement("span"), { className: "agent-launcher-label", textContent: "Model override" }));
-				modelField.appendChild(buildModelSelect(step.model, (value) => { step.model = value; }));
+				modelField.appendChild(buildModelSelect(step.model, (value) => {
+					step.model = value;
+					updateMeta();
+					updatePreview();
+				}));
 				grid.appendChild(modelField);
 
 				card.appendChild(grid);
@@ -243,14 +279,14 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit }) {
 				taskInput.rows = 3;
 				taskInput.placeholder = mode === "single" ? "What should this subagent do?" : "What should this step do?";
 				taskInput.value = step.task;
-				taskInput.addEventListener("input", () => { step.task = taskInput.value; });
+				taskInput.addEventListener("input", () => {
+					step.task = taskInput.value;
+					updatePreview();
+				});
 				taskField.appendChild(taskInput);
 				card.appendChild(taskField);
 
-				const meta = document.createElement("div");
-				meta.className = "agent-launcher-meta";
-				const agentInfo = agents.find((item) => item.name === step.agent);
-				meta.textContent = agentInfo?.description || "";
+				updateMeta();
 				card.appendChild(meta);
 				stepsWrap.appendChild(card);
 			});
@@ -281,6 +317,7 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit }) {
 				input.checked = Boolean(flags[option.key]);
 				input.addEventListener("change", () => {
 					flags[option.key] = input.checked;
+					updatePreview();
 				});
 				label.appendChild(input);
 				label.appendChild(document.createTextNode(option.label));
@@ -290,8 +327,11 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit }) {
 
 			const preview = document.createElement("div");
 			preview.className = "agent-launcher-preview";
-			const cmd = commandForMode(mode, steps, flags);
-			preview.textContent = cmd || "Fill in at least one agent and task.";
+			const updatePreview = () => {
+				const cmd = commandForMode(mode, steps, flags);
+				preview.textContent = cmd || "Fill in at least one agent and task.";
+			};
+			updatePreview();
 			body.appendChild(preview);
 
 			const actions = document.createElement("div");

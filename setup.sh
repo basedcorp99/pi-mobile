@@ -23,6 +23,77 @@ ok()    { printf '\033[1;32m✓\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33m!\033[0m %s\n' "$*"; }
 err()   { printf '\033[1;31m✗\033[0m %s\n' "$*"; }
 
+APT_UPDATED=""
+
+run_privileged() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+  elif command -v sudo &>/dev/null; then
+    sudo "$@"
+  else
+    return 127
+  fi
+}
+
+install_system_packages() {
+  local packages=("$@")
+  [[ ${#packages[@]} -eq 0 ]] && return 0
+
+  if command -v apt-get &>/dev/null; then
+    if [[ "$(id -u)" -ne 0 ]] && ! command -v sudo &>/dev/null; then
+      warn "Need sudo/root to install system packages: ${packages[*]}"
+      return 1
+    fi
+    if [[ -z "$APT_UPDATED" ]]; then
+      info "Updating apt package index..."
+      run_privileged apt-get update
+      APT_UPDATED=1
+    fi
+    info "Installing system packages: ${packages[*]}"
+    run_privileged apt-get install -y "${packages[@]}"
+    return 0
+  fi
+
+  if command -v brew &>/dev/null; then
+    info "Installing packages with Homebrew: ${packages[*]}"
+    brew install "${packages[@]}"
+    return 0
+  fi
+
+  warn "No supported package manager found to install: ${packages[*]}"
+  return 1
+}
+
+ensure_fuzzy_search_tools() {
+  local missing=()
+  command -v fzf &>/dev/null || missing+=("fzf")
+  command -v zoxide &>/dev/null || missing+=("zoxide")
+
+  if [[ ${#missing[@]} -eq 0 ]]; then
+    ok "fzf found: $(fzf --version 2>/dev/null | head -n1 || echo 'installed')"
+    ok "zoxide found: $(zoxide --version 2>/dev/null || echo 'installed')"
+    return 0
+  fi
+
+  info "Installing fuzzy directory search tools: ${missing[*]}"
+  install_system_packages "${missing[@]}" || {
+    warn "Couldn't automatically install ${missing[*]} — directory search will fall back without them"
+    return 1
+  }
+
+  if command -v fzf &>/dev/null; then
+    ok "fzf found: $(fzf --version 2>/dev/null | head -n1 || echo 'installed')"
+  else
+    warn "fzf is still not in PATH"
+  fi
+
+  if command -v zoxide &>/dev/null; then
+    ok "zoxide found: $(zoxide --version 2>/dev/null || echo 'installed')"
+  else
+    warn "zoxide is still not in PATH"
+  fi
+}
+
 # ── 1. Check bun ─────────────────────────────────────────────────
 if ! command -v bun &>/dev/null; then
   err "bun is required but not found. Install it: https://bun.sh"
@@ -54,6 +125,7 @@ check_install_global() {
 
 check_install_global pi @mariozechner/pi-coding-agent
 check_install_global pi-subagents pi-subagents
+ensure_fuzzy_search_tools || true
 
 # Ensure pi-ask-tool-extension is available for the custom /review extension.
 ASK_EXT_ROOT="$(npm root -g 2>/dev/null || true)"
@@ -120,19 +192,33 @@ sed -i "s|__SCRIPT_DIR__|$SCRIPT_DIR|g" "$BIN_DIR/pi-mobile"
 chmod +x "$BIN_DIR/pi-mobile"
 ok "Installed pi-mobile launcher → $BIN_DIR/pi-mobile"
 
-# ── 7. Add ~/.bin to PATH if needed ──────────────────────────────
-add_to_path() {
+# ── 7. Add ~/.bin to PATH + shell hooks if needed ─────────────────
+ensure_shell_line() {
   local shell_rc="$1"
-  local line='export PATH="$HOME/.bin:$PATH"'
-  if [[ -f "$shell_rc" ]] && grep -qF '/.bin' "$shell_rc" 2>/dev/null; then
+  local match="$2"
+  local line="$3"
+  local description="$4"
+
+  if [[ -f "$shell_rc" ]] && grep -qF "$match" "$shell_rc" 2>/dev/null; then
     return 0
   fi
-  if [[ -f "$shell_rc" ]] || [[ "$shell_rc" == "$HOME/.bashrc" ]] || [[ "$shell_rc" == "$HOME/.zshrc" ]]; then
+
+  if [[ -f "$shell_rc" ]] || [[ "$shell_rc" == "$HOME/.bashrc" ]] || [[ "$shell_rc" == "$HOME/.zshrc" ]] || [[ "$shell_rc" == "$HOME/.profile" ]]; then
     echo "" >> "$shell_rc"
     echo "# pi-mobile" >> "$shell_rc"
     echo "$line" >> "$shell_rc"
-    ok "Added ~/.bin to PATH in $(basename "$shell_rc")"
+    ok "Added $description to $(basename "$shell_rc")"
   fi
+}
+
+add_to_path() {
+  ensure_shell_line "$1" '/.bin' 'export PATH="$HOME/.bin:$PATH"' '~/.bin to PATH'
+}
+
+add_zoxide_init() {
+  local shell_rc="$1"
+  local shell_name="$2"
+  ensure_shell_line "$shell_rc" "zoxide init $shell_name" "eval \"\$(zoxide init $shell_name)\"" "zoxide init ($shell_name)"
 }
 
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
@@ -149,6 +235,18 @@ if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
   warn "Restart your shell or run: export PATH=\"\$HOME/.bin:\$PATH\""
 else
   ok "~/.bin already in PATH"
+fi
+
+if command -v zoxide &>/dev/null; then
+  if [[ -n "${ZSH_VERSION:-}" ]] || [[ "$SHELL" == */zsh ]]; then
+    add_zoxide_init "$HOME/.zshrc" "zsh"
+  fi
+  if [[ -n "${BASH_VERSION:-}" ]] || [[ "$SHELL" == */bash ]]; then
+    add_zoxide_init "$HOME/.bashrc" "bash"
+  fi
+  zoxide add "$HOME" 2>/dev/null || true
+  zoxide add "$SCRIPT_DIR" 2>/dev/null || true
+  ok "zoxide ready"
 fi
 
 # ── 8. Voice transcription (Parakeet) ────────────────────────────

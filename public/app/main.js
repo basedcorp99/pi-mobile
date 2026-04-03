@@ -627,6 +627,7 @@ askDialog = createAskDialog({ menuOverlay, menuScrim, menuPanel });
 uiPromptDialog = createUiPromptDialog({ menuOverlay, menuScrim, menuPanel });
 agentLauncher = createAgentLauncher({
 	menuOverlay, menuPanel, api,
+	getActiveState: () => sessionCtrl.getActiveState(),
 	onSubmit: (cmd) => void sessionCtrl.sendPrompt(cmd),
 });
 reviewLauncher = createReviewLauncher({
