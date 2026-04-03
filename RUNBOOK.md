@@ -1,5 +1,17 @@
 # Runbook
 
+## Setup and extension notes
+
+`./setup.sh` installs two separate things:
+
+- the `pi-mobile` launcher in `~/.bin/pi-mobile`
+- the custom `/review` Pi extension in `~/.pi/agent/extensions/review.ts`
+
+The `/review` extension source lives in this repo at `pi-extension/review.ts`, but it is meant to be copied into Pi's normal extension directory.
+Do **not** add the `pi-mobile` repo URL to Pi's `packages` list just to get `/review` loaded; that makes Pi try to load the extension straight from the cloned repo path.
+
+If you change `pi-extension/review.ts`, rerun `./setup.sh` to reinstall the copied extension.
+
 ## Local only
 
 ```bash

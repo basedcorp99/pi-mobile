@@ -146,11 +146,15 @@ fi
 mkdir -p "$BIN_DIR"
 
 # ── 5. Install custom /review Pi extension ───────────────────────
-REVIEW_EXT_SRC="$SCRIPT_DIR/extensions/review.ts"
+REVIEW_EXT_SRC="$SCRIPT_DIR/pi-extension/review.ts"
 REVIEW_EXT_DST="$HOME/.pi/agent/extensions/review.ts"
 mkdir -p "$(dirname "$REVIEW_EXT_DST")"
 if [[ -f "$REVIEW_EXT_SRC" ]]; then
-  sed "s|__PI_ASK_EXT_ROOT__|$ASK_EXT_ROOT|g" "$REVIEW_EXT_SRC" > "$REVIEW_EXT_DST"
+  sed \
+    -e "s|__PI_ASK_EXT_ROOT__|$ASK_EXT_ROOT|g" \
+    -e "s|from \"pi-ask-tool-extension/src/ask-inline-ui.ts\"|from \"$ASK_EXT_ROOT/pi-ask-tool-extension/src/ask-inline-ui.ts\"|g" \
+    -e "s|from \"pi-ask-tool-extension/src/ask-tabs-ui.ts\"|from \"$ASK_EXT_ROOT/pi-ask-tool-extension/src/ask-tabs-ui.ts\"|g" \
+    "$REVIEW_EXT_SRC" > "$REVIEW_EXT_DST"
   ok "Installed custom /review extension → $REVIEW_EXT_DST"
 else
   warn "Custom /review extension source not found at $REVIEW_EXT_SRC"

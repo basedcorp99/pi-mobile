@@ -19,7 +19,7 @@ Sessions are JSONL on disk, same location as native `pi` CLI.
 ## Install
 
 ```bash
-git clone https://github.com/p1rallels/pi-mobile.git
+git clone https://github.com/basedcorp99/pi-mobile.git
 cd pi-mobile
 ./setup.sh
 ```
@@ -27,7 +27,11 @@ cd pi-mobile
 The setup script:
 - Installs bun dependencies
 - Creates a `pi-mobile` launcher in `~/.bin` and adds it to PATH
+- Installs the custom `/review` Pi extension to `~/.pi/agent/extensions/review.ts`
 - Optionally installs voice transcription (Parakeet model, ~640MB)
+
+`pi-mobile` itself is a standalone web app repo, not a Pi package you should add to `~/.pi/agent/settings.json` under `packages`.
+The `/review` extension source lives in `pi-extension/review.ts` and is copied into Pi's normal extension directory by `./setup.sh`.
 
 After setup:
 
@@ -37,7 +41,7 @@ pi-mobile --host $(tailscale ip -4)    # tailscale
 pi-mobile --host 0.0.0.0 --port 8080  # public (use --token)
 ```
 
-See [RUNBOOK.md](./RUNBOOK.md) for Tailscale / Cloudflare / TLS / auth details.
+See [RUNBOOK.md](./RUNBOOK.md) for Tailscale / Cloudflare / TLS / auth details, plus notes on the installed `/review` extension.
 
 ## Prerequisites
 

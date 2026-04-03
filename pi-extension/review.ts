@@ -1,8 +1,8 @@
 import { complete, StringEnum, type Message } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type, type Static } from "@sinclair/typebox";
-import { askSingleQuestionWithInlineNote } from "__PI_ASK_EXT_ROOT__/pi-ask-tool-extension/src/ask-inline-ui.ts";
-import { askQuestionsWithTabs } from "__PI_ASK_EXT_ROOT__/pi-ask-tool-extension/src/ask-tabs-ui.ts";
+import { askSingleQuestionWithInlineNote } from "pi-ask-tool-extension/src/ask-inline-ui.ts";
+import { askQuestionsWithTabs } from "pi-ask-tool-extension/src/ask-tabs-ui.ts";
 import { readFile } from "node:fs/promises";
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
