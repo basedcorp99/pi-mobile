@@ -121,6 +121,7 @@ interface RunningSession {
 	controllerClientId: string | null;
 	clients: Map<string, SessionClient>;
 	unsubscribe: (() => void) | null;
+	lastAssistantMessageText: string;
 }
 
 function extractTextContent(content: unknown): string {
@@ -140,6 +141,18 @@ function computeFirstMessage(messages: AgentSession["messages"]): string {
 		if (text.trim().length > 0) return text;
 	}
 	return "(no messages)";
+}
+
+function extractLastAssistantText(messages: unknown): string {
+	if (!Array.isArray(messages)) return "";
+	for (let i = messages.length - 1; i >= 0; i -= 1) {
+		const message = messages[i];
+		if (!message || typeof message !== "object") continue;
+		if ((message as { role?: unknown }).role !== "assistant") continue;
+		const text = extractTextContent((message as { content?: unknown }).content).trim();
+		if (text) return text;
+	}
+	return "";
 }
 
 function toIso(ms: number): string {
@@ -1046,14 +1059,27 @@ export class PiWebRuntime {
 			controllerClientId,
 			clients: new Map(),
 			unsubscribe: null,
+			lastAssistantMessageText: "",
 		};
 
 		const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
 			runtime.modifiedAtMs = Date.now();
 			this.broadcast(sessionId, { type: "agent_event", event });
 
+			if (event.type === "agent_start") {
+				runtime.lastAssistantMessageText = "";
+			}
+
 			if (event.type === "message_end" && (event as any)?.message?.role === "assistant") {
 				const messageText = extractTextContent((event as any)?.message?.content).trim();
+				if (messageText) {
+					runtime.lastAssistantMessageText = messageText;
+				}
+			}
+
+			if (event.type === "agent_end") {
+				const messageText = runtime.lastAssistantMessageText || extractLastAssistantText((event as any)?.messages);
+				runtime.lastAssistantMessageText = "";
 				if (messageText && this.onMessageNotification) {
 					void this.onMessageNotification({
 						sessionId,
