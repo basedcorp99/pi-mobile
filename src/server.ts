@@ -274,7 +274,7 @@ const runtime = new PiWebRuntime({
 		const result = await pushService.send({
 			title,
 			body,
-			url: "/",
+			url: `/?session=${encodeURIComponent(payload.sessionId)}`,
 			sessionId: payload.sessionId,
 			sessionName: payload.sessionName,
 			tag: payload.sessionId,

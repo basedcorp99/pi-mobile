@@ -39,7 +39,7 @@ export function installPushNotifications({ api, btnNotify, lblNotify, onNotice }
 	async function ensureRegistration() {
 		if (!supported) return null;
 		if (registration) return registration;
-		registration = await navigator.serviceWorker.register("/sw.js?v=20260401b", { scope: "/" });
+		registration = await navigator.serviceWorker.register("/sw.js?v=20260403a", { scope: "/" });
 		return registration;
 	}
 
