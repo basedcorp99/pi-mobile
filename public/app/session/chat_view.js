@@ -1,7 +1,7 @@
 import { safeRandomUUID } from "../core/uuid.js";
 import { safeStringify } from "../core/stringify.js";
 import { toolResultToText } from "../core/tool_format.js";
-import { renderMarkdown } from "../render/markdown.js";
+import { renderMarkdown, renderMarkdownThrottled } from "../render/markdown.js";
 import { extractTextContent, parseAssistantContent } from "./content.js";
 import { parseSubagentSlashMessage } from "./subagent_slash.js";
 import { parseReviewSummaryMessage } from "./review_summary.js";
@@ -497,7 +497,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 				block.thinking.textContent = block.rawThinking;
 			} else if (update.type === "text_delta" && typeof update.delta === "string") {
 				block.rawText += update.delta;
-				block.text.textContent = block.rawText;
+				renderMarkdownThrottled(block.text, block.rawText);
 			} else {
 				return;
 			}

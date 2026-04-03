@@ -12,6 +12,7 @@
 		"@mariozechner/pi-coding-agent": "~0.64.0",
 		"@simplewebauthn/browser": "^13.2.2",
 		"@simplewebauthn/server": "^13.2.3",
+		"marked": "^17.0.5",
 		"pi-ask-tool-extension": "^0.2.4",
 		"web-push": "^3.6.7"
 	},

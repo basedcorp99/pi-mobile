@@ -1,97 +1,43 @@
-function appendBold(target, text) {
-	const parts = String(text).split("**");
-	const markerCount = parts.length - 1;
-	if (markerCount === 0 || markerCount % 2 !== 0) {
-		target.appendChild(document.createTextNode(String(text)));
-		return;
-	}
+import { marked } from "../../lib/marked.esm.js";
 
-	for (let i = 0; i < parts.length; i += 1) {
-		const part = parts[i];
-		if (i % 2 === 0) {
-			if (part) target.appendChild(document.createTextNode(part));
-			continue;
-		}
-		const span = document.createElement("span");
-		span.className = "bold";
-		span.textContent = part;
-		target.appendChild(span);
-	}
-}
+// Configure marked for AI responses: GFM tables, breaks on single newlines
+marked.setOptions({
+	gfm: true,
+	breaks: true,
+});
 
-function appendInlineMarkdown(target, text) {
-	const chunks = String(text).split("`");
-	const backtickCount = chunks.length - 1;
-	if (backtickCount === 0 || backtickCount % 2 !== 0) {
-		appendBold(target, text);
-		return;
-	}
-
-	for (let i = 0; i < chunks.length; i += 1) {
-		const chunk = chunks[i];
-		if (i % 2 === 0) {
-			if (chunk) appendBold(target, chunk);
-		} else {
-			const span = document.createElement("span");
-			span.className = "ci";
-			span.textContent = chunk;
-			target.appendChild(span);
-		}
-		if (i < chunks.length - 1 && chunk.length === 0) {
-			// Preserve empty chunks (e.g. "``") as literal backticks.
-			// We already handled odd backtick counts above, so this is rare.
-		}
-	}
+// Simple HTML sanitizer — strip <script>, on* attributes, javascript: urls
+function sanitize(html) {
+	return html
+		.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+		.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+		.replace(/href\s*=\s*(?:"javascript:[^"]*"|'javascript:[^']*')/gi, 'href="#"');
 }
 
 export function renderMarkdown(target, text) {
-	target.innerHTML = "";
-
-	const lines = String(text).split("\n");
-	let inFence = false;
-	let fenceLines = [];
-	let textLines = [];
-
-	const flushText = () => {
-		if (textLines.length === 0) return;
-		appendInlineMarkdown(target, textLines.join("\n"));
-		textLines = [];
-	};
-
-	const flushFence = () => {
-		const pre = document.createElement("div");
-		pre.className = "codeblock";
-		const code = document.createElement("code");
-		code.textContent = fenceLines.join("\n");
-		pre.appendChild(code);
-		target.appendChild(pre);
-		fenceLines = [];
-	};
-
-	for (const line of lines) {
-		if (!inFence) {
-			if (line.startsWith("```")) {
-				flushText();
-				inFence = true;
-				fenceLines = [];
-				continue;
-			}
-			textLines.push(line);
-			continue;
-		}
-
-		if (line.startsWith("```")) {
-			flushFence();
-			inFence = false;
-			continue;
-		}
-		fenceLines.push(line);
+	if (!text) {
+		target.innerHTML = "";
+		return;
 	}
-
-	if (inFence) {
-		flushFence();
-	} else {
-		flushText();
-	}
+	const html = marked.parse(String(text));
+	target.innerHTML = sanitize(html);
 }
 
+// Throttled rendering for streaming — renders at most once per animation frame
+let pendingRenders = new Map();
+
+export function renderMarkdownThrottled(target, text) {
+	if (pendingRenders.has(target)) {
+		// Update the pending text but don't schedule another frame
+		pendingRenders.set(target, text);
+		return;
+	}
+	pendingRenders.set(target, text);
+	requestAnimationFrame(() => {
+		const latestText = pendingRenders.get(target);
+		pendingRenders.delete(target);
+		if (latestText != null) {
+			renderMarkdown(target, latestText);
+		}
+	});
+}
