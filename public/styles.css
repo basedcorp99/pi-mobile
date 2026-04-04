@@ -1237,7 +1237,7 @@
     .footer {
       flex-shrink: 0;
       background: #18181e;
-      padding: 2px 16px;
+      padding: 2px 16px calc(2px + env(safe-area-inset-bottom));
       overflow: hidden;
     }
     #footer-line-1 { display: none; }
