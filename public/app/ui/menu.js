@@ -95,6 +95,7 @@ export function createMenu({
 	onToggleTheme,
 	onToggleSendOnEnter,
 	onAdjustFontScale,
+	onToggleVoiceInputMode,
 	onTogglePush,
 	onTestPush,
 	onSetSteeringMode,
@@ -439,7 +440,7 @@ export function createMenu({
 			menuPanel.innerHTML = "";
 			const prefs = typeof getPrefs === "function"
 				? getPrefs()
-				: { theme: "dark", sendOnEnter: true, fontScale: 1, faceIdEnabled: false, pushSupported: false, pushSubscribed: false, steeringMode: null, followUpMode: null, hasSessionControl: false };
+				: { theme: "dark", sendOnEnter: true, fontScale: 1, voiceInputMode: "compose", faceIdEnabled: false, pushSupported: false, pushSubscribed: false, steeringMode: null, followUpMode: null, hasSessionControl: false };
 
 			const hdr = document.createElement("div");
 			hdr.className = "menu-hdr";
@@ -555,6 +556,18 @@ export function createMenu({
 				},
 				onPlus: () => {
 					if (typeof onAdjustFontScale === "function") onAdjustFontScale(0.05);
+					renderSettings();
+				},
+			}));
+			body.appendChild(makeSetting({
+				name: "Voice mode",
+				value: prefs.voiceInputMode === "auto-send" ? "auto-send" : "compose",
+				description: prefs.voiceInputMode === "auto-send"
+					? "Record, transcribe, then auto-send the voice note with current images."
+					: "Record, transcribe into the composer, then review and send manually.",
+				active: prefs.voiceInputMode === "auto-send",
+				onClick: () => {
+					if (typeof onToggleVoiceInputMode === "function") onToggleVoiceInputMode();
 					renderSettings();
 				},
 			}));

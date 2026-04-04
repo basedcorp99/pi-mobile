@@ -1,6 +1,6 @@
-import { enqueueVoiceJob, listVoiceJobs, removeVoiceJob } from "./voice_queue.js";
+import { enqueueVoiceJob, listVoiceJobs, removeVoiceJob, updateVoiceJob } from "./voice_queue.js";
 
-export function createVoiceRecorder({ api, onTranscription, onNotice, onStateChange }) {
+export function createVoiceRecorder({ api, onTranscription, onNotice, onStateChange, onJobQueued }) {
 	const MIC_STREAM_KEEPALIVE_MS = 10 * 60 * 1000;
 
 	let mediaRecorder = null;
@@ -12,6 +12,7 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 	let recordingStartTime = 0;
 	let wakeLockSentinel = null;
 	let micPermissionPrimed = false;
+	let pendingJobMeta = null;
 
 	function isSupported() {
 		return Boolean(navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== "undefined");
@@ -107,14 +108,30 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 		transcribing = true;
 		onStateChange?.();
 		try {
+			const deliverTranscript = async (text, sourceJob) => {
+				if (typeof text !== "string" || !text.trim()) {
+					if (!options.silent) onNotice?.("Transcription returned empty.", "error");
+					return false;
+				}
+				const handled = await onTranscription?.(text, sourceJob || job);
+				if (handled === false) return false;
+				if (job.id) await removeVoiceJob(job.id);
+				return true;
+			};
+
+			if (typeof job.transcript === "string" && job.transcript.trim()) {
+				return await deliverTranscript(job.transcript, job);
+			}
+
 			const formData = new FormData();
 			const fileName = job.mimeType === "audio/mp4" ? "voice.mp4" : "voice.webm";
 			formData.append("audio", job.blob, fileName);
 			const result = await api.postFormData("/api/voice/transcribe", formData);
 			if (result.ok && result.text) {
-				onTranscription(result.text);
-				await removeVoiceJob(job.id);
-				return true;
+				const nextJob = job.id
+					? (await updateVoiceJob(job.id, { transcript: result.text, transcriptAt: Date.now() })) || { ...job, transcript: result.text }
+					: { ...job, transcript: result.text, transcriptAt: Date.now() };
+				return await deliverTranscript(result.text, nextJob);
 			}
 			if (!options.silent) onNotice?.("Transcription returned empty.", "error");
 			return false;
@@ -153,7 +170,7 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 		}
 	}
 
-	async function start() {
+	async function start(options = {}) {
 		if (recording) return { started: true };
 		if (!isSupported()) {
 			onNotice?.("Voice recording not supported in this browser.", "error");
@@ -161,6 +178,9 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 		}
 
 		try {
+			pendingJobMeta = options && typeof options.jobMeta === "object" && options.jobMeta
+				? { ...options.jobMeta }
+				: null;
 			const { stream, promptedForPermission } = await getMicrophoneStream();
 			const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
 				? "audio/webm;codecs=opus"
@@ -171,6 +191,7 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 						: "";
 
 			if (!mimeType) {
+				pendingJobMeta = null;
 				scheduleMicRelease();
 				onNotice?.("No supported audio format found.", "error");
 				return { started: false };
@@ -188,6 +209,7 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 				onStateChange?.();
 
 				if (chunks.length === 0) {
+					pendingJobMeta = null;
 					onNotice?.("No audio captured.", "error");
 					return;
 				}
@@ -196,19 +218,34 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 				chunks = [];
 
 				if (blob.size < 1000) {
+					pendingJobMeta = null;
 					onNotice?.("Recording too short.", "error");
 					return;
 				}
 
 				try {
-					await enqueueVoiceJob(blob, mimeType);
-					await resumePending({ silent: true });
+					const metadata = pendingJobMeta && typeof pendingJobMeta === "object" ? pendingJobMeta : {};
+					pendingJobMeta = null;
+					const createdAt = Date.now();
+					const jobId = await enqueueVoiceJob(blob, mimeType, metadata);
+					const job = {
+						id: jobId,
+						blob,
+						mimeType,
+						createdAt,
+						...metadata,
+					};
+					if (jobId) await onJobQueued?.(job);
+					if (jobId) await resumePending({ silent: true });
+					else await transcribeQueuedJob(job, { silent: true });
 				} catch (error) {
+					pendingJobMeta = null;
 					onNotice?.(error instanceof Error ? error.message : String(error), "error");
 				}
 			};
 
 			mediaRecorder.onerror = async () => {
+				pendingJobMeta = null;
 				recording = false;
 				mediaRecorder = null;
 				await releaseWakeLock();
@@ -226,6 +263,7 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 			}
 			return { started: true };
 		} catch (error) {
+			pendingJobMeta = null;
 			recording = false;
 			mediaRecorder = null;
 			await releaseWakeLock();

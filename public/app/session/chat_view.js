@@ -82,7 +82,7 @@ function renderUserMessageContent(el, content) {
 	}
 }
 
-export function createChatView({ msgsEl, isPhoneLikeFn }) {
+export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 	let currentAssistant = null; // { block, text, thinking, rawText, rawThinking }
 	let appendedUserMessageKeys = new Set();
 	let appendedAssistantMessageKeys = new Set();
@@ -113,6 +113,67 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 
 	function shouldAutoStick() {
 		return autoStickToBottom || isNearBottom(msgsEl);
+	}
+
+	async function copyText(text) {
+		const value = typeof text === "string" ? text : "";
+		if (!value) return false;
+		try {
+			if (navigator?.clipboard?.writeText) {
+				await navigator.clipboard.writeText(value);
+				return true;
+			}
+		} catch {
+			// fall through to legacy copy path
+		}
+		try {
+			const el = document.createElement("textarea");
+			el.value = value;
+			el.setAttribute("readonly", "true");
+			el.style.position = "absolute";
+			el.style.left = "-9999px";
+			document.body.appendChild(el);
+			el.select();
+			const ok = document.execCommand("copy");
+			document.body.removeChild(el);
+			return ok;
+		} catch {
+			return false;
+		}
+	}
+
+	function flashActionButton(button, label) {
+		if (!(button instanceof HTMLElement)) return;
+		const original = button.dataset.originalLabel || button.textContent || "";
+		button.dataset.originalLabel = original;
+		button.textContent = label;
+		button.disabled = true;
+		setTimeout(() => {
+			button.textContent = original;
+			button.disabled = false;
+		}, 1200);
+	}
+
+	function createMessageActions(actions) {
+		if (!Array.isArray(actions) || actions.length === 0) return null;
+		const row = document.createElement("div");
+		row.className = "message-actions";
+		for (const action of actions) {
+			if (!action || typeof action.label !== "string" || typeof action.onClick !== "function") continue;
+			const btn = document.createElement("button");
+			btn.type = "button";
+			btn.className = "message-action-btn";
+			btn.textContent = action.label;
+			btn.dataset.originalLabel = action.label;
+			if (typeof action.title === "string" && action.title) btn.title = action.title;
+			btn.addEventListener("click", async (event) => {
+				event.preventDefault();
+				event.stopPropagation();
+				await action.onClick(btn);
+			});
+			row.appendChild(btn);
+		}
+		return row.childElementCount > 0 ? row : null;
 	}
 
 	function rememberRecentUserFingerprint(fingerprint, timestamp) {
@@ -168,11 +229,30 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 		text.className = "md";
 		text.textContent = "";
 
+		const actions = document.createElement("div");
+		actions.className = "message-actions";
+		actions.hidden = true;
+		const copyBtn = document.createElement("button");
+		copyBtn.type = "button";
+		copyBtn.className = "message-action-btn";
+		copyBtn.textContent = "Copy";
+		copyBtn.dataset.originalLabel = "Copy";
+		copyBtn.hidden = true;
+		actions.appendChild(copyBtn);
+
 		block.appendChild(thinking);
 		block.appendChild(text);
+		block.appendChild(actions);
 		msgsEl.appendChild(block);
 
-		currentAssistant = { block, text, thinking, rawText: "", rawThinking: "" };
+		const state = { block, text, thinking, actions, copyBtn, rawText: "", rawThinking: "" };
+		copyBtn.addEventListener("click", async (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			const ok = await copyText(state.rawText);
+			flashActionButton(copyBtn, ok ? "Copied" : "Failed");
+		});
+		currentAssistant = state;
 		return currentAssistant;
 	}
 
@@ -184,6 +264,27 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 		const el = document.createElement("div");
 		el.className = "user-msg";
 		renderUserMessageContent(el, content);
+		const rawText = extractTextContent(content);
+		if (rawText.trim()) {
+			const actions = createMessageActions([
+				{
+					label: "Copy",
+					title: "Copy prompt",
+					onClick: async (button) => {
+						const ok = await copyText(rawText);
+						flashActionButton(button, ok ? "Copied" : "Failed");
+					},
+				},
+				{
+					label: "Reuse",
+					title: "Put this prompt back in the composer",
+					onClick: async () => {
+						if (typeof onReusePrompt === "function") onReusePrompt(rawText);
+					},
+				},
+			]);
+			if (actions) el.appendChild(actions);
+		}
 
 		const insertBeforeEl = opts.insertBefore instanceof HTMLElement ? opts.insertBefore : null;
 		if (insertBeforeEl && insertBeforeEl.parentNode === msgsEl) {
@@ -266,6 +367,9 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 			if (parsed.text && (!block.rawText || parsed.text.length >= block.rawText.length)) {
 				block.rawText = parsed.text;
 			}
+			const hasCopyText = Boolean(block.rawText.trim());
+			block.copyBtn.hidden = !hasCopyText;
+			block.actions.hidden = !hasCopyText;
 			renderMarkdown(block.text, block.rawText);
 		}
 		return { block, parsed };
@@ -580,6 +684,23 @@ export function createChatView({ msgsEl, isPhoneLikeFn }) {
 		scrollToBottom,
 		appendNotice,
 		renderHistory,
+		replaceFromMessages: (messages) => {
+			const stick = shouldAutoStick();
+			const prevScrollTop = msgsEl.scrollTop;
+			clear();
+			renderHistory(messages || []);
+			if (stick) {
+				autoStickToBottom = true;
+				scrollToBottom(true);
+			} else {
+				internalScroll = true;
+				msgsEl.scrollTop = prevScrollTop;
+				requestAnimationFrame(() => {
+					internalScroll = false;
+					autoStickToBottom = false;
+				});
+			}
+		},
 		syncFromMessages: (messages) => {
 			const stick = shouldAutoStick();
 			const prevScrollTop = msgsEl.scrollTop;

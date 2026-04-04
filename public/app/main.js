@@ -11,13 +11,16 @@ import {
 	getSendOnEnterEnabled,
 	getThemePreference,
 	getToken,
+	getVoiceInputMode,
 	setFontScalePreference,
 	setSendOnEnterEnabled,
 	setThemePreference,
+	setVoiceInputMode,
 } from "./core/storage.js";
 import { createSessionController } from "./session/controller.js";
+import { extractTextContent } from "./session/content.js";
 import { createMenu } from "./ui/menu.js";
-import { createAskDialog } from "./ui/ask_dialog.js";
+import { createAskDialog } from "./ui/ask_dialog.js?v=1775350601";
 import { createUiPromptDialog } from "./ui/ui_prompt_dialog.js";
 import { createAgentLauncher } from "./ui/agent_launcher.js";
 import { createReviewLauncher } from "./ui/review_launcher.js";
@@ -59,6 +62,7 @@ const btnAbortTxt = btnAbort?.querySelector?.(".txt") || null;
 const btnCompactTxt = btnCompact?.querySelector?.(".txt") || null;
 const btnReleaseTxt = btnRelease?.querySelector?.(".txt") || null;
 const btnAttach = document.getElementById("btn-attach");
+const btnHistory = document.getElementById("btn-history");
 const btnVoice = document.getElementById("btn-voice");
 const btnAttachClear = document.getElementById("btn-attach-clear");
 const attachList = document.getElementById("attach-list");
@@ -71,6 +75,7 @@ const menuScrim = document.getElementById("menu-scrim");
 const menuPanel = document.getElementById("menu-panel");
 
 const sidebar = document.querySelector(".sidebar");
+const chat = document.querySelector(".chat");
 const sidebarOverlay = document.getElementById("sidebar-overlay");
 
 const kbMenu = document.getElementById("kb-menu");
@@ -94,9 +99,17 @@ const faceIdEnabled = getFaceIdEnabled();
 const faceIdGuard = faceIdEnabled ? installFaceIdGuard({ api }) : { start: async () => {} };
 let pushCtrl = null;
 
+const VOICE_INPUT_MODE_COMPOSE = "compose";
+const VOICE_INPUT_MODE_AUTO_SEND = "auto-send";
+
+function normalizeVoiceInputMode(mode) {
+	return mode === VOICE_INPUT_MODE_AUTO_SEND ? VOICE_INPUT_MODE_AUTO_SEND : VOICE_INPUT_MODE_COMPOSE;
+}
+
 // Preferences
 let sendOnEnter = getSendOnEnterEnabled();
 let fontScale = getFontScalePreference();
+let voiceInputMode = normalizeVoiceInputMode(getVoiceInputMode());
 const savedTheme = getThemePreference();
 if (savedTheme === "light") document.body.classList.add("light");
 document.documentElement.style.setProperty("--font-scale", String(fontScale));
@@ -111,6 +124,11 @@ let uiPromptDialog = null;
 let agentLauncher = null;
 let reviewLauncher = null;
 let pendingAttachments = [];
+const pendingPromptHistoryBySession = new Map();
+let promptHistoryCursor = -1;
+let promptHistoryDraft = "";
+let promptHistorySessionId = null;
+let lastComposerSessionId = null;
 
 function syncSessionUrl(sessionId) {
 	if (replayName) return;
@@ -167,6 +185,139 @@ async function openSessionTarget(sessionId) {
 	}
 
 	return false;
+}
+
+function setComposerText(text) {
+	input.value = typeof text === "string" ? text : "";
+	autoResize(input);
+	input.focus();
+	const end = input.value.length;
+	if (typeof input.setSelectionRange === "function") input.setSelectionRange(end, end);
+}
+
+function resetPromptHistoryNavigation() {
+	promptHistoryCursor = -1;
+	promptHistoryDraft = "";
+	promptHistorySessionId = sessionCtrl?.getActiveSessionId?.() || null;
+}
+
+function truncatePromptLabel(text, max = 120) {
+	const normalized = String(text || "").replace(/\s+/g, " ").trim();
+	if (normalized.length <= max) return normalized;
+	return `${normalized.slice(0, max - 1)}…`;
+}
+
+function getServerPromptHistory(sessionId) {
+	const state = sessionCtrl?.getActiveState?.();
+	if (!sessionId || !state || state.sessionId !== sessionId || !Array.isArray(state.messages)) return [];
+	return state.messages
+		.filter((message) => message && message.role === "user")
+		.map((message) => extractTextContent(message.content))
+		.filter((text) => typeof text === "string" && text.trim().length > 0);
+}
+
+function computePromptHistoryOverlap(base, extras) {
+	const max = Math.min(base.length, extras.length);
+	for (let size = max; size > 0; size -= 1) {
+		let matches = true;
+		for (let i = 0; i < size; i += 1) {
+			if (base[base.length - size + i] !== extras[i]) {
+				matches = false;
+				break;
+			}
+		}
+		if (matches) return size;
+	}
+	return 0;
+}
+
+function rememberPromptHistory(sessionId, text) {
+	if (!sessionId || typeof text !== "string" || text.trim().length === 0) return;
+	const entries = pendingPromptHistoryBySession.get(sessionId) || [];
+	entries.push(text);
+	pendingPromptHistoryBySession.set(sessionId, entries.slice(-50));
+}
+
+function reconcilePendingPromptHistory(sessionId) {
+	if (!sessionId) return;
+	const pending = pendingPromptHistoryBySession.get(sessionId);
+	if (!pending || pending.length === 0) return;
+	const overlap = computePromptHistoryOverlap(getServerPromptHistory(sessionId), pending);
+	const remaining = pending.slice(overlap);
+	if (remaining.length > 0) pendingPromptHistoryBySession.set(sessionId, remaining);
+	else pendingPromptHistoryBySession.delete(sessionId);
+}
+
+function getSessionPromptHistory(sessionId = sessionCtrl?.getActiveSessionId?.()) {
+	if (!sessionId) return [];
+	const base = getServerPromptHistory(sessionId);
+	const pending = pendingPromptHistoryBySession.get(sessionId) || [];
+	const overlap = computePromptHistoryOverlap(base, pending);
+	return [...base, ...pending.slice(overlap)].slice(-50);
+}
+
+function syncPromptHistoryState() {
+	const sessionId = sessionCtrl?.getActiveSessionId?.() || null;
+	if (sessionId !== lastComposerSessionId) {
+		lastComposerSessionId = sessionId;
+		resetPromptHistoryNavigation();
+	}
+	if (sessionId) reconcilePendingPromptHistory(sessionId);
+}
+
+function openPromptHistoryDialog() {
+	const history = getSessionPromptHistory();
+	if (input.disabled || !uiPromptDialog || history.length === 0) return;
+	const options = history
+		.slice()
+		.reverse()
+		.map((text, index) => ({
+			label: index === 0 ? `${truncatePromptLabel(text)} · latest` : truncatePromptLabel(text),
+			value: text,
+		}));
+	uiPromptDialog.showSelect("prompt-history", "Prompt history", options, (_id, cancelled, value) => {
+		if (cancelled || typeof value !== "string") return;
+		resetPromptHistoryNavigation();
+		setComposerText(value);
+	});
+}
+
+function navigatePromptHistory(direction) {
+	const sessionId = sessionCtrl?.getActiveSessionId?.();
+	if (!sessionId) return false;
+	const history = getSessionPromptHistory(sessionId);
+	if (history.length === 0) return false;
+	const selectionStart = input.selectionStart ?? 0;
+	const selectionEnd = input.selectionEnd ?? 0;
+	if (selectionStart !== selectionEnd) return false;
+	if (promptHistorySessionId !== sessionId) resetPromptHistoryNavigation();
+	promptHistorySessionId = sessionId;
+
+	if (direction === "up") {
+		if (selectionStart !== 0) return false;
+		if (promptHistoryCursor === -1) promptHistoryDraft = input.value;
+		if (promptHistoryCursor < history.length - 1) promptHistoryCursor += 1;
+		setComposerText(history[history.length - 1 - promptHistoryCursor]);
+		return true;
+	}
+
+	if (direction === "down") {
+		if (selectionEnd !== input.value.length || promptHistoryCursor === -1) return false;
+		promptHistoryCursor -= 1;
+		setComposerText(promptHistoryCursor === -1 ? promptHistoryDraft : history[history.length - 1 - promptHistoryCursor]);
+		return true;
+	}
+
+	return false;
+}
+
+function reusePrompt(text) {
+	if (input.disabled) {
+		sessionCtrl.appendNotice("Take over to reuse prompts.", "warning");
+		return;
+	}
+	resetPromptHistoryNavigation();
+	setComposerText(text);
 }
 
 function formatTokens(n) {
@@ -298,6 +449,73 @@ function clearAttachments() {
 	updateControls();
 }
 
+function getPendingAttachmentKeys() {
+	return pendingAttachments.map((attachment) => `${attachment?.content?.mimeType || ""}:${attachment?.content?.data?.length || 0}:${attachment?.label || ""}`);
+}
+
+function buildVoiceJobMeta() {
+	const mode = normalizeVoiceInputMode(voiceInputMode);
+	const sessionId = sessionCtrl?.getActiveSessionId?.() || null;
+	const images = mode === VOICE_INPUT_MODE_AUTO_SEND
+		? pendingAttachments
+			.map((attachment) => attachment?.content)
+			.filter((image) => image && typeof image === "object")
+			.map((image) => ({ ...image }))
+		: [];
+	return {
+		mode,
+		sessionId,
+		attachmentKeys: mode === VOICE_INPUT_MODE_AUTO_SEND ? getPendingAttachmentKeys() : [],
+		images,
+	};
+}
+
+function handleQueuedVoiceJob(job) {
+	if (!job || normalizeVoiceInputMode(job.mode) !== VOICE_INPUT_MODE_AUTO_SEND) return;
+	if ((job.sessionId || null) !== (sessionCtrl?.getActiveSessionId?.() || null)) return;
+	const expectedKeys = Array.isArray(job.attachmentKeys) ? job.attachmentKeys : [];
+	if (expectedKeys.length === 0) return;
+	const currentKeys = getPendingAttachmentKeys();
+	if (currentKeys.length !== expectedKeys.length) return;
+	if (currentKeys.every((key, index) => key === expectedKeys[index])) clearAttachments();
+}
+
+function appendTranscriptToComposer(text) {
+	if (typeof text !== "string" || !text.trim() || input.disabled) return false;
+	const before = input.value;
+	input.value = before ? `${before} ${text}` : text;
+	autoResize(input);
+	input.focus();
+	return true;
+}
+
+async function handleVoiceTranscription(text, job = null) {
+	const transcript = typeof text === "string" ? text.trim() : "";
+	if (!transcript) return false;
+	const mode = normalizeVoiceInputMode(job?.mode);
+	if (mode === VOICE_INPUT_MODE_AUTO_SEND) {
+		const sessionId = typeof job?.sessionId === "string" && job.sessionId.trim()
+			? job.sessionId.trim()
+			: sessionCtrl.getActiveSessionId();
+		if (!sessionId) return false;
+		const images = Array.isArray(job?.images)
+			? job.images.filter((image) => image && typeof image === "object")
+			: [];
+		rememberPromptHistory(sessionId, transcript);
+		return Boolean(await sessionCtrl.sendPromptToSession(sessionId, transcript, images, {
+			optimistic: sessionId === sessionCtrl.getActiveSessionId(),
+			errorLabel: "Failed to send voice note",
+		}));
+	}
+	if (document.visibilityState !== "visible" || input.disabled) return false;
+	return appendTranscriptToComposer(transcript);
+}
+
+function resumePendingVoiceIfPossible() {
+	if (!voiceRecorder || document.visibilityState !== "visible") return;
+	void voiceRecorder.resumePending({ silent: true });
+}
+
 function updateAttachmentControls() {
 	const hasSession = Boolean(sessionCtrl.getActiveSessionId());
 	const isController = hasSession && sessionCtrl.isController();
@@ -305,7 +523,13 @@ function updateAttachmentControls() {
 	const disabled = !hasSession || !isController || actionBusy === "release" || actionBusy === "compact" || actionBusy === "bash";
 	if (btnCommands) btnCommands.disabled = disabled;
 	if (btnAttach) btnAttach.disabled = disabled;
-	if (btnVoice) btnVoice.disabled = disabled || !voiceUiReady || voiceRecorder?.isTranscribing?.();
+	if (btnVoice) {
+		btnVoice.disabled = disabled || !voiceUiReady || voiceRecorder?.isTranscribing?.();
+		if (!voiceUiReady) btnVoice.title = "Voice loading…";
+		else if (voiceRecorder?.isTranscribing?.()) btnVoice.title = "Transcribing…";
+		else if (voiceRecorder?.isRecording?.()) btnVoice.title = voiceRecordingMode === "hold" ? "Release to stop" : "Tap to stop";
+		else btnVoice.title = voiceInputMode === VOICE_INPUT_MODE_AUTO_SEND ? "Tap or hold to record and auto-send" : "Tap or hold to record";
+	}
 	if (btnAttachClear) btnAttachClear.disabled = disabled || pendingAttachments.length === 0;
 	if (imageInput) imageInput.disabled = disabled;
 	if (!disabled && pendingAttachments.length === 0) {
@@ -374,7 +598,8 @@ function updateControls() {
 	const phone = isPhoneLike();
 	const actionBusy = sessionCtrl.getActionBusy ? sessionCtrl.getActionBusy() : null;
 	const canChangeSettings = hasSession && isController && !streaming && !actionBusy;
-	if (!isController && menuOverlay?.dataset?.kind === "ask") askDialog?.close?.();
+	const hasPromptHistory = hasSession && getSessionPromptHistory(sessionCtrl.getActiveSessionId()).length > 0;
+	askDialog?.setActiveSession?.(sessionCtrl.getActiveSessionId(), isController);
 
 	btnAbort.disabled = !hasSession || Boolean(actionBusy && actionBusy !== "abort" && actionBusy !== "bash");
 	btnTakeover.disabled = !hasSession || Boolean(actionBusy);
@@ -383,6 +608,7 @@ function updateControls() {
 	input.disabled = !hasSession || !isController || actionBusy === "release" || actionBusy === "compact" || actionBusy === "bash";
 	if (btnModel) btnModel.disabled = !canChangeSettings;
 	if (btnThinking) btnThinking.disabled = !canChangeSettings;
+	if (btnHistory) btnHistory.disabled = !hasSession || !isController || actionBusy === "release" || actionBusy === "compact" || actionBusy === "bash" || !hasPromptHistory;
 	if (btnTakeoverTxt) btnTakeoverTxt.textContent = actionBusy === "takeover" ? "Taking…" : actionBusy === "reconnect" ? "Reconnecting…" : isController ? "Reconnect" : "Take over";
 	if (kbTakeoverTextNode) kbTakeoverTextNode.textContent = actionBusy === "takeover" ? " Taking…" : actionBusy === "reconnect" ? " Reconnecting…" : isController ? " Reconnect" : " Take over";
 	if (btnAbortTxt) btnAbortTxt.textContent = actionBusy === "abort" ? "Aborting…" : actionBusy === "bash" ? "Stop" : "Abort";
@@ -404,7 +630,7 @@ function updateControls() {
 		input.placeholder = phone
 			? sendOnEnter
 				? "Type a prompt (Enter key to send, Return key for newline)"
-				: "Type a prompt (Enter for newline, Ctrl+Enter to send)"
+				: "Type a prompt (Enter for newline, use Send to send)"
 			: streaming
 				? "Streaming… (Esc to abort, Enter to queue follow-up)"
 				: sendOnEnter
@@ -440,6 +666,9 @@ async function sendPromptFromInput() {
 	const images = pendingAttachments.map((attachment) => attachment.content);
 	if (!text.trim() && images.length === 0) return false;
 	const snapshot = pendingAttachments.slice();
+	const sessionId = sessionCtrl.getActiveSessionId();
+	if (sessionId && text.trim()) rememberPromptHistory(sessionId, text);
+	resetPromptHistoryNavigation();
 	input.value = "";
 	autoResize(input);
 	clearAttachments();
@@ -459,15 +688,14 @@ async function sendPromptFromInput() {
 
 function closeOpenOverlays() {
 	let closed = false;
+	if (askDialog?.isOpen?.()) {
+		askDialog.close(undefined, true);
+		closed = true;
+	}
 	if (menuOverlay?.classList?.contains("open")) {
-		if (menuOverlay?.dataset?.kind === "ask") {
-			askDialog?.close?.(true);
-		} else {
-			menuCtrl?.close?.();
-			askDialog?.close?.();
-			uiPromptDialog?.close?.();
-			agentLauncher?.close?.();
-		}
+		menuCtrl?.close?.();
+		uiPromptDialog?.close?.();
+		agentLauncher?.close?.();
 		closed = true;
 	}
 	if (sidebar?.classList?.contains("open")) {
@@ -490,8 +718,10 @@ const sessionCtrl = createSessionController({
 	isPhoneLikeFn: isPhoneLike,
 	onStateChange: () => {
 		syncSessionUrl(sessionCtrl.getActiveSessionId());
+		syncPromptHistoryState();
 		updateFooter();
 		updateControls();
+		resumePendingVoiceIfPossible();
 		void pushCtrl?.syncActivity?.();
 	},
 	onCloseMenu: () => {
@@ -500,10 +730,10 @@ const sessionCtrl = createSessionController({
 	},
 	onSidebarClose: () => sidebarCtrl?.setOpen(false),
 	onSidebarRefresh: () => sidebarCtrl?.refresh(),
-	onAskRequest: (askId, questions) => {
+	onAskRequest: (sessionId, askId, questions) => {
 		if (!sessionCtrl.isController()) return;
 		if (askDialog) {
-			askDialog.show(askId, questions, (id, cancelled, selections) => {
+			askDialog.show(sessionId, askId, questions, (id, cancelled, selections) => {
 				void sessionCtrl.sendAskResponse(id, cancelled, selections);
 			});
 		}
@@ -528,6 +758,12 @@ const sessionCtrl = createSessionController({
 				void sessionCtrl.sendUiResponse(id, cancelled, value);
 			});
 		}
+	},
+	onReusePrompt: (text) => {
+		reusePrompt(text);
+	},
+	onSessionEnded: (sessionId) => {
+		askDialog?.close?.(sessionId, false);
 	},
 });
 
@@ -577,6 +813,7 @@ menuCtrl = createMenu({
 		theme: document.body.classList.contains("light") ? "light" : "dark",
 		sendOnEnter,
 		fontScale,
+		voiceInputMode,
 		faceIdEnabled,
 		pushSupported: pushCtrl?.isSupported?.() ?? false,
 		pushSubscribed: pushCtrl?.isSubscribed?.() ?? false,
@@ -598,6 +835,11 @@ menuCtrl = createMenu({
 		fontScale = Math.max(0.85, Math.min(1.35, Math.round((fontScale + delta) * 100) / 100));
 		setFontScalePreference(fontScale);
 		document.documentElement.style.setProperty("--font-scale", String(fontScale));
+	},
+	onToggleVoiceInputMode: () => {
+		voiceInputMode = voiceInputMode === VOICE_INPUT_MODE_AUTO_SEND ? VOICE_INPUT_MODE_COMPOSE : VOICE_INPUT_MODE_AUTO_SEND;
+		setVoiceInputMode(voiceInputMode);
+		updateControls();
 	},
 	onTogglePush: async () => {
 		if (!pushCtrl) return;
@@ -630,7 +872,7 @@ menuCtrl = createMenu({
 	},
 });
 
-askDialog = createAskDialog({ menuOverlay, menuScrim, menuPanel });
+askDialog = createAskDialog({ host: chat, getSendOnEnter: () => sendOnEnter });
 uiPromptDialog = createUiPromptDialog({ menuOverlay, menuScrim, menuPanel });
 agentLauncher = createAgentLauncher({
 	menuOverlay, menuPanel, api,
@@ -654,19 +896,15 @@ void pushCtrl.start();
 
 let voiceRecordingMode = null;
 let voiceUiReady = false;
-const voiceRecorder = createVoiceRecorder({
+let voiceRecorder = null;
+
+voiceRecorder = createVoiceRecorder({
 	api,
-	onTranscription: (text) => {
-		if (!input.disabled) {
-			const before = input.value;
-			input.value = before ? `${before} ${text}` : text;
-			autoResize(input);
-			input.focus();
-		}
-	},
+	onTranscription: handleVoiceTranscription,
+	onJobQueued: handleQueuedVoiceJob,
 	onNotice: sessionCtrl.appendNotice,
 	onStateChange: () => {
-		if (btnVoice) {
+		if (btnVoice && voiceRecorder) {
 			const rec = voiceRecorder.isRecording();
 			const trans = voiceRecorder.isTranscribing();
 			if (!rec) voiceRecordingMode = null;
@@ -681,17 +919,20 @@ const voiceRecorder = createVoiceRecorder({
 					? "Transcribing…"
 					: rec
 						? (voiceRecordingMode === "hold" ? "Release to stop" : "Tap to stop")
-						: "Tap or hold to record";
+						: voiceInputMode === VOICE_INPUT_MODE_AUTO_SEND
+							? "Tap or hold to record and auto-send"
+							: "Tap or hold to record";
 		}
 	},
 });
 void voiceRecorder.resumePending({ silent: true }).finally(() => {
 	voiceUiReady = true;
-	if (btnVoice) {
+	if (btnVoice && voiceRecorder) {
 		btnVoice.classList.toggle("pending", false);
 		btnVoice.textContent = voiceRecorder.isTranscribing() ? "⏳" : "\uD83C\uDF99";
 	}
 	updateControls();
+	resumePendingVoiceIfPossible();
 });
 let voiceWasHidden = false;
 document.addEventListener("visibilitychange", () => {
@@ -701,7 +942,7 @@ document.addEventListener("visibilitychange", () => {
 	}
 	if (document.visibilityState === "visible" && voiceWasHidden) {
 		voiceWasHidden = false;
-		void voiceRecorder.resumePending({ silent: true });
+		resumePendingVoiceIfPossible();
 	}
 });
 
@@ -720,6 +961,7 @@ btnRelease.addEventListener("click", () => {
 	});
 });
 if (btnAttach) btnAttach.addEventListener("click", () => imageInput?.click());
+if (btnHistory) btnHistory.addEventListener("click", () => openPromptHistoryDialog());
 if (btnVoice) {
 	let pressActive = false;
 	let holdStarting = false;
@@ -749,7 +991,7 @@ if (btnVoice) {
 			}
 		}
 		try {
-			const result = await voiceRecorder.start();
+			const result = await voiceRecorder.start({ jobMeta: buildVoiceJobMeta() });
 			if (result?.primed) {
 				voiceRecordingMode = null;
 				btnVoice.classList.remove("holding");
@@ -893,7 +1135,7 @@ if (btnScrollBottom && msgs) {
 		scrollBtnRaf = 0;
 		const remaining = Math.max(0, msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight);
 		const scrollable = msgs.scrollHeight > msgs.clientHeight + 24;
-		const nearBottom = remaining <= 48;
+		const nearBottom = remaining <= 400;
 		btnScrollBottom.hidden = !scrollable || nearBottom;
 	};
 	const scheduleScrollBtnUpdate = () => {
@@ -911,8 +1153,21 @@ if (btnScrollBottom && msgs) {
 	scheduleScrollBtnUpdate();
 }
 
-input.addEventListener("input", () => autoResize(input));
+input.addEventListener("input", () => {
+	autoResize(input);
+	resetPromptHistoryNavigation();
+});
 input.addEventListener("keydown", (e) => {
+	if (!e.isComposing && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+		if (e.key === "ArrowUp" && navigatePromptHistory("up")) {
+			e.preventDefault();
+			return;
+		}
+		if (e.key === "ArrowDown" && navigatePromptHistory("down")) {
+			e.preventDefault();
+			return;
+		}
+	}
 	if (e.key !== "Enter" || e.isComposing) return;
 	if (sendOnEnter) {
 		if (!e.shiftKey) {
@@ -1047,7 +1302,8 @@ function installSidebarSwipeGestures() {
 		}
 	}, { passive: false });
 }
-installSidebarSwipeGestures();
+// Disabled: left-edge swipe-to-open conflicts with text selection on phones.
+// Use the Sessions button instead.
 
 if (replayName) {
 	clearAttachments();

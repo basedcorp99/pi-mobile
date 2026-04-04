@@ -28,7 +28,7 @@ function txDone(tx) {
 	});
 }
 
-export async function enqueueVoiceJob(blob, mimeType) {
+export async function enqueueVoiceJob(blob, mimeType, metadata = {}) {
 	const db = await openDb();
 	if (!db) return null;
 	const id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -38,6 +38,7 @@ export async function enqueueVoiceJob(blob, mimeType) {
 		blob,
 		mimeType,
 		createdAt: Date.now(),
+		...(metadata && typeof metadata === "object" ? metadata : {}),
 	});
 	await txDone(tx);
 	db.close();
@@ -56,6 +57,31 @@ export async function listVoiceJobs() {
 	await txDone(tx);
 	db.close();
 	return items.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+}
+
+export async function updateVoiceJob(id, patch) {
+	const db = await openDb();
+	if (!db || !id) return null;
+	const tx = db.transaction(STORE_NAME, "readwrite");
+	const store = tx.objectStore(STORE_NAME);
+	const current = await new Promise((resolve, reject) => {
+		const req = store.get(id);
+		req.onsuccess = () => resolve(req.result || null);
+		req.onerror = () => reject(req.error || new Error("Failed to read voice job"));
+	});
+	if (!current) {
+		await txDone(tx);
+		db.close();
+		return null;
+	}
+	const next = {
+		...current,
+		...(patch && typeof patch === "object" ? patch : {}),
+	};
+	store.put(next);
+	await txDone(tx);
+	db.close();
+	return next;
 }
 
 export async function removeVoiceJob(id) {

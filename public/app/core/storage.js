@@ -93,3 +93,11 @@ export function setFontScalePreference(scale) {
 	safeLocalStorageSet("piWebFontScale", String(normalized));
 }
 
+export function getVoiceInputMode() {
+	return safeLocalStorageGet("piWebVoiceInputMode") === "auto-send" ? "auto-send" : "compose";
+}
+
+export function setVoiceInputMode(mode) {
+	safeLocalStorageSet("piWebVoiceInputMode", mode === "auto-send" ? "auto-send" : "compose");
+}
+

@@ -327,6 +327,62 @@
 	      line-height: 1.35;
 	    }
 	    .ask-nav { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid #2a2a32; }
+	    .ask-session-overlay {
+	      position: absolute;
+	      inset: 0;
+	      z-index: 18;
+	      display: flex;
+	      align-items: center;
+	      justify-content: center;
+	      padding: 12px;
+	      pointer-events: none;
+	    }
+	    .ask-session-overlay[hidden] { display: none !important; }
+	    .ask-session-scrim {
+	      position: absolute;
+	      inset: 0;
+	      background: transparent;
+	      pointer-events: none;
+	    }
+	    .ask-session-panel {
+	      position: relative;
+	      width: min(560px, calc(100% - 8px));
+	      max-height: min(82vh, 760px);
+	      overflow: auto;
+	      border-radius: 12px;
+	      border: 1px solid #2a2a32;
+	      background: #12121a;
+	      box-shadow: 0 18px 48px rgba(0,0,0,.38);
+	      pointer-events: auto;
+	    }
+	    .ask-custom-editor {
+	      margin-top: 10px;
+	      padding: 10px;
+	      border: 1px solid #2a2a32;
+	      border-radius: 10px;
+	      background: #161620;
+	    }
+	    .ask-custom-input {
+	      width: 100%;
+	      min-height: 84px;
+	      resize: vertical;
+	      border: 1px solid #2a2a32;
+	      border-radius: 8px;
+	      background: #101018;
+	      color: #d4d4d4;
+	      font: inherit;
+	      line-height: 1.45;
+	      padding: 10px;
+	      outline: none;
+	    }
+	    .ask-custom-input::placeholder { color: #666666; }
+	    .ask-custom-actions {
+	      display: flex;
+	      align-items: center;
+	      justify-content: flex-end;
+	      gap: 8px;
+	      margin-top: 10px;
+	    }
 	    .setting-stepper {
 	      display: flex;
 	      align-items: center;
@@ -585,6 +641,7 @@
 
     /* ── Chat area ─────────────────────────────────────────── */
     .chat {
+      position: relative;
       flex: 1; display: flex; flex-direction: column; overflow: hidden;
     }
 
@@ -758,6 +815,31 @@
       border: 1px solid #2a2a32;
       background: #12121a;
     }
+    .message-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+    }
+    .message-action-btn {
+      border: 1px solid #2a2a32;
+      background: #1e1e28;
+      color: #808080;
+      font: inherit;
+      font-size: 11px;
+      line-height: 1;
+      padding: 6px 10px;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: color .12s, border-color .12s, background .12s, opacity .12s;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .message-action-btn:hover { color: #d4d4d4; border-color: #8abeb7; background: #232330; }
+    .message-action-btn:disabled { opacity: .7; cursor: default; }
 
     /* ── Assistant text / thinking — no bg ─────────────────── */
     .assistant-block { padding: 0 16px; }
@@ -1428,6 +1510,8 @@
     body.light .sidebar-wt-repo-hdr { color: #2a7a6a; }
     body.light .scroll-bottom-btn { background: #f0f0ea; border-color: #d0d0ca; color: #666; box-shadow: 0 2px 8px rgba(0,0,0,.1); }
     body.light .scroll-bottom-btn:hover { color: #2a2a2a; border-color: #2a7a6a; }
+    body.light .message-action-btn { background: #f0f0ea; border-color: #d0d0ca; color: #666; }
+    body.light .message-action-btn:hover { background: #e0e0da; border-color: #2a7a6a; color: #2a2a2a; }
     body.light .si-rename,
     body.light .si-del { border-color: transparent; color:#888; }
     body.light .si-rename:hover { color:#2a7a6a; background: rgba(42,122,106,.08); }
@@ -1500,6 +1584,11 @@
     body.light .ask-option-primary { color: #1f1f1f; }
     body.light .ask-option-secondary { color: #666 !important; }
     body.light .ask-nav { border-top-color: #d0d0ca; }
+    body.light .ask-session-scrim { background: transparent; }
+    body.light .ask-session-panel { background: #f0f0ea; border-color: #d0d0ca; }
+    body.light .ask-custom-editor { background: #f6f6f1; border-color: #d8d8d2; }
+    body.light .ask-custom-input { background: #fff; border-color: #d0d0ca; color: #1f1f1f; }
+    body.light .ask-custom-input::placeholder { color: #999; }
     body.light .agent-launcher-intro,
     body.light .agent-launcher-label,
     body.light .agent-launcher-check,

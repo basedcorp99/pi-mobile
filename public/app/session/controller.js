@@ -15,6 +15,8 @@ export function createSessionController({
 	onUiSelect,
 	onUiInput,
 	onUiConfirm,
+	onReusePrompt,
+	onSessionEnded,
 }) {
 	let activeSessionId = null;
 	let activeState = null;
@@ -36,7 +38,7 @@ export function createSessionController({
 	let pendingPrompt = false;
 	let actionBusy = null;
 
-	const chatView = createChatView({ msgsEl, isPhoneLikeFn });
+	const chatView = createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt });
 
 	function clearResumeTimer() {
 		if (resumeTimer) {
@@ -81,7 +83,10 @@ export function createSessionController({
 			activeState = state;
 			lastCliCommand = computeCliCommand(activeState) || lastCliCommand;
 			const shouldSyncMessages = options.syncMessages === true || (options.syncMessages !== false && !state?.isStreaming);
-			if (shouldSyncMessages) chatView.syncFromMessages(state?.messages || []);
+			if (shouldSyncMessages) {
+				if (!state?.isStreaming && !pendingPrompt) chatView.replaceFromMessages(state?.messages || []);
+				else chatView.syncFromMessages(state?.messages || []);
+			}
 			if (!state?.isStreaming) {
 				pendingPrompt = false;
 				if (actionBusy === "abort") actionBusy = null;
@@ -165,6 +170,7 @@ export function createSessionController({
 		clearResumeTimer();
 		closeEvents();
 		const oldId = activeSessionId;
+		if (oldId && typeof onSessionEnded === "function") onSessionEnded(oldId);
 		activeSessionId = null;
 		activeState = null;
 		controllerClientId = null;
@@ -246,7 +252,8 @@ export function createSessionController({
 			lastCliCommand = computeCliCommand(activeState) || lastCliCommand;
 
 			if (isReconnectInit) {
-				chatView.syncFromMessages(activeState.messages || []);
+				if (activeState?.isStreaming || pendingPrompt) chatView.syncFromMessages(activeState.messages || []);
+				else chatView.replaceFromMessages(activeState.messages || []);
 			} else {
 				onCloseMenu();
 				chatView.clear();
@@ -282,9 +289,11 @@ export function createSessionController({
 		if (event.type === "released") {
 			onCloseMenu();
 			const cmd = lastCliCommand;
+			const endedSessionId = activeSessionId;
 			resumeGeneration += 1;
 			clearResumeTimer();
 			closeEvents();
+			if (endedSessionId && typeof onSessionEnded === "function") onSessionEnded(endedSessionId);
 			activeSessionId = null;
 			activeState = null;
 			controllerClientId = null;
@@ -300,8 +309,8 @@ export function createSessionController({
 
 		if (event.type === "ask_request") {
 			if (controllerClientId !== clientId) return;
-			if (typeof onAskRequest === "function") {
-				onAskRequest(event.askId, event.questions);
+			if (typeof onAskRequest === "function" && activeSessionId) {
+				onAskRequest(activeSessionId, event.askId, event.questions);
 			}
 			return;
 		}
@@ -591,64 +600,97 @@ export function createSessionController({
 		}
 	}
 
-	async function sendPrompt(text, images = []) {
-		if (!activeSessionId) return;
+	async function postPromptCommand(sessionId, text, images) {
+		await api.postJson(`/api/sessions/${encodeURIComponent(sessionId)}/command`, {
+			type: "prompt",
+			clientId,
+			text,
+			images,
+		});
+	}
+
+	async function sendPromptToSession(sessionId, text, images = [], options = {}) {
+		const targetSessionId = typeof sessionId === "string" ? sessionId.trim() : "";
+		if (!targetSessionId) return false;
 		const trimmedText = typeof text === "string" ? text.trim() : "";
-		if (images.length === 0 && /^!!\s*\S/.test(trimmedText)) {
+		const targetIsActive = targetSessionId === activeSessionId;
+		if (targetIsActive && images.length === 0 && /^!!\s*\S/.test(trimmedText)) {
 			await runBash(trimmedText.replace(/^!!\s*/, ""), { excludeFromContext: true });
-			return;
+			return true;
 		}
-		if (images.length === 0 && /^!\s*\S/.test(trimmedText)) {
+		if (targetIsActive && images.length === 0 && /^!\s*\S/.test(trimmedText)) {
 			await runBash(trimmedText.replace(/^!\s*/, ""), { excludeFromContext: false });
-			return;
+			return true;
 		}
-		pendingPrompt = true;
-		chatView.appendOptimisticUserMessage([
-			...(text ? [{ type: "text", text }] : []),
-			...images,
-		]);
-		onStateChange();
-		try {
-			await api.postJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/command`, {
-				type: "prompt",
-				clientId,
-				text,
-				images,
-			});
-			// If the prompt returned without starting an agent run (e.g. extension
-			// commands like /subagents that don't emit agent_start), clear the
-			// pending state so the UI doesn't get stuck on "working".
+
+		const finishActivePrompt = async () => {
+			if (!targetIsActive) return true;
 			if (pendingPrompt && !activeState?.isStreaming) {
 				pendingPrompt = false;
 				onStateChange();
+				if (options.syncAfterSend !== false) await refreshState({ silent: true, syncMessages: true });
 			}
+			return true;
+		};
+
+		if (targetIsActive) {
+			pendingPrompt = true;
+			if (options.optimistic !== false) {
+				chatView.appendOptimisticUserMessage([
+					...(text ? [{ type: "text", text }] : []),
+					...images,
+				]);
+			}
+			onStateChange();
+		}
+
+		try {
+			await postPromptCommand(targetSessionId, text, images);
+			await finishActivePrompt();
+			return true;
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
-			// Auto-takeover on "Not controller" and retry once
 			if (msg.includes("Not controller") || msg.includes("not_controller")) {
 				try {
-					await api.postJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/takeover`, { clientId });
-					await api.postJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/command`, {
-						type: "prompt", clientId, text, images,
-					});
-					if (pendingPrompt && !activeState?.isStreaming) {
+					await api.postJson(`/api/sessions/${encodeURIComponent(targetSessionId)}/takeover`, { clientId });
+					if (targetIsActive) {
+						controllerClientId = clientId;
+						role = "controller";
+					}
+					await postPromptCommand(targetSessionId, text, images);
+					await finishActivePrompt();
+					return true;
+				} catch (retryError) {
+					if (targetIsActive) {
 						pendingPrompt = false;
 						onStateChange();
 					}
-					return;
-				} catch (retryError) {
-					pendingPrompt = false;
-					onStateChange();
-					if (isSessionGoneError(retryError)) { handleSessionLost(); return; }
-					chatView.appendNotice("Failed to take control of session", "error");
-					return;
+					if (isSessionGoneError(retryError)) {
+						if (targetIsActive) handleSessionLost();
+						else if (options.noticeOnError !== false) chatView.appendNotice(options.errorLabel || "Voice note target session is no longer running", "error");
+						return false;
+					}
+					if (options.noticeOnError !== false) chatView.appendNotice(options.errorLabel || "Failed to take control of session", "error");
+					return false;
 				}
 			}
-			pendingPrompt = false;
-			onStateChange();
-			if (isSessionGoneError(error)) { handleSessionLost(); return; }
-			chatView.appendNotice(msg, "error");
+			if (targetIsActive) {
+				pendingPrompt = false;
+				onStateChange();
+			}
+			if (isSessionGoneError(error)) {
+				if (targetIsActive) handleSessionLost();
+				else if (options.noticeOnError !== false) chatView.appendNotice(options.errorLabel || "Voice note target session is no longer running", "error");
+				return false;
+			}
+			if (options.noticeOnError !== false) chatView.appendNotice(options.errorLabel || msg, "error");
+			return false;
 		}
+	}
+
+	async function sendPrompt(text, images = []) {
+		if (!activeSessionId) return false;
+		return await sendPromptToSession(activeSessionId, text, images, { optimistic: true });
 	}
 
 	async function compact(customInstructions) {
@@ -824,6 +866,7 @@ export function createSessionController({
 		runReplay,
 		selectSession,
 		sendPrompt,
+		sendPromptToSession,
 		sendAskResponse,
 		sendUiResponse,
 		setSteeringMode,

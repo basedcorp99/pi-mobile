@@ -1,220 +1,373 @@
 const OTHER_OPTION = "Other (provide your own answer)";
 
-export function createAskDialog({ menuOverlay, menuScrim, menuPanel }) {
-	let activeDialog = null;
+function emptySelection() {
+	return { selectedOptions: [], customInput: undefined };
+}
 
-	function resetUi() {
-		if (menuOverlay) {
-			menuOverlay.classList.remove("open");
-			delete menuOverlay.dataset.locked;
-			delete menuOverlay.dataset.kind;
+function cloneSelection(selection) {
+	return {
+		selectedOptions: Array.isArray(selection?.selectedOptions) ? [...selection.selectedOptions] : [],
+		customInput: typeof selection?.customInput === "string" ? selection.customInput : undefined,
+	};
+}
+
+function mergeSelections(previousQuestions, previousSelections, nextQuestions) {
+	const byId = new Map();
+	for (let i = 0; i < previousQuestions.length; i += 1) {
+		const question = previousQuestions[i];
+		if (!question?.id) continue;
+		byId.set(question.id, cloneSelection(previousSelections[i]));
+	}
+	return nextQuestions.map((question) => byId.get(question.id) || emptySelection());
+}
+
+export function createAskDialog({ host, getSendOnEnter }) {
+	const dialogs = new Map();
+	let activeSessionId = null;
+	let isController = false;
+	let overlay = null;
+	let panel = null;
+
+	function ensureUi() {
+		if (overlay && panel) return;
+		if (!host) return;
+		overlay = document.createElement("div");
+		overlay.className = "ask-session-overlay";
+		overlay.hidden = true;
+		const scrim = document.createElement("div");
+		scrim.className = "ask-session-scrim";
+		scrim.addEventListener("click", (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+		});
+		panel = document.createElement("div");
+		panel.className = "ask-session-panel";
+		overlay.appendChild(scrim);
+		overlay.appendChild(panel);
+		host.appendChild(overlay);
+	}
+
+	function getVisibleDialog() {
+		if (!activeSessionId || !isController) return null;
+		return dialogs.get(activeSessionId) || null;
+	}
+
+	function hideUi() {
+		if (overlay) overlay.hidden = true;
+		if (panel) panel.innerHTML = "";
+	}
+
+	function finish(dialog, cancelled, answerSelections) {
+		dialogs.delete(dialog.sessionId);
+		if (dialog.sessionId === activeSessionId) hideUi();
+		dialog.onSubmit(dialog.askId, cancelled, answerSelections);
+	}
+
+	function close(sessionId = activeSessionId, cancelled = false) {
+		if (!sessionId) {
+			hideUi();
+			return;
 		}
-		if (menuPanel) {
-			menuPanel.innerHTML = "";
-			menuPanel.style.left = "";
-			menuPanel.style.top = "";
-			menuPanel.style.right = "";
-			menuPanel.style.width = "";
-			menuPanel.style.maxWidth = "";
-			menuPanel.style.maxHeight = "";
-			menuPanel.style.transform = "";
+		const dialog = dialogs.get(sessionId);
+		if (!dialog) {
+			if (sessionId === activeSessionId) hideUi();
+			return;
+		}
+		dialogs.delete(sessionId);
+		if (sessionId === activeSessionId) hideUi();
+		if (cancelled) {
+			dialog.onSubmit(dialog.askId, true, []);
 		}
 	}
 
-	function close(cancelled = false) {
-		const current = activeDialog;
-		activeDialog = null;
-		resetUi();
-		if (cancelled && current) {
-			current.onSubmit(current.askId, true, []);
+	function renderCurrent() {
+		ensureUi();
+		if (!panel || !overlay) return;
+		const dialog = getVisibleDialog();
+		if (!dialog) {
+			hideUi();
+			return;
 		}
-	}
 
-	function show(askId, questions, onSubmit) {
-		if (!menuOverlay || !menuPanel) return;
-		close(false);
-		activeDialog = { askId, onSubmit };
-
-		const selections = questions.map(() => ({ selectedOptions: [], customInput: undefined }));
-		const finish = (cancelled, answerSelections) => {
-			activeDialog = null;
-			resetUi();
-			onSubmit(askId, cancelled, answerSelections);
+		overlay.hidden = false;
+		panel.innerHTML = "";
+		const index = Math.max(0, Math.min(dialog.currentIndex, dialog.questions.length - 1));
+		dialog.currentIndex = index;
+		const q = dialog.questions[index];
+		const sel = dialog.selections[index] || (dialog.selections[index] = emptySelection());
+		const questionCount = dialog.questions.length;
+		const isMulti = Boolean(q?.multi);
+		const editorQuestionId = q?.id || `idx:${index}`;
+		const isEditingCustom = dialog.customEditor?.questionId === editorQuestionId;
+		const sendOnEnter = typeof getSendOnEnter === "function" ? Boolean(getSendOnEnter()) : true;
+		const persistCustomDraft = (draftText) => {
+			const raw = typeof draftText === "string"
+				? draftText
+				: dialog.customEditor?.questionId === editorQuestionId
+					? (dialog.customEditor.draft || "")
+					: (sel.customInput || "");
+			if (dialog.customEditor?.questionId === editorQuestionId) {
+				dialog.customEditor.draft = raw;
+			}
+			const trimmed = raw.trim();
+			sel.customInput = trimmed || undefined;
+			if (!isMulti && (trimmed || dialog.customEditor?.questionId === editorQuestionId)) {
+				sel.selectedOptions = [];
+			}
+			return trimmed;
+		};
+		const closeCustomEditor = () => {
+			if (dialog.customEditor?.questionId === editorQuestionId) dialog.customEditor = null;
+		};
+		const goToQuestion = (nextIndex) => {
+			persistCustomDraft();
+			closeCustomEditor();
+			dialog.currentIndex = Math.max(0, Math.min(nextIndex, questionCount - 1));
+			renderCurrent();
+		};
+		const submitSelections = () => {
+			persistCustomDraft();
+			closeCustomEditor();
+			finish(dialog, false, dialog.selections.map((entry) => cloneSelection(entry)));
 		};
 
-		menuOverlay.classList.add("open");
-		menuOverlay.dataset.locked = "1";
-		menuOverlay.dataset.kind = "ask";
-		menuPanel.innerHTML = "";
-		menuPanel.style.left = "50%";
-		menuPanel.style.top = "50%";
-		menuPanel.style.right = "auto";
-		menuPanel.style.width = "min(560px, 94vw)";
-		menuPanel.style.maxWidth = "min(560px, 94vw)";
-		menuPanel.style.maxHeight = "min(82vh, 760px)";
-		menuPanel.style.transform = "translate(-50%, -50%)";
+		const hdr = document.createElement("div");
+		hdr.className = "menu-hdr";
+		const title = document.createElement("div");
+		title.className = "menu-title";
+		title.textContent = questionCount > 1 ? `Question ${index + 1}/${questionCount}` : "Choose an option";
+		const cancelBtn = document.createElement("button");
+		cancelBtn.className = "menu-mini";
+		cancelBtn.textContent = "Cancel";
+		cancelBtn.addEventListener("click", () => close(dialog.sessionId, true));
+		hdr.appendChild(title);
+		hdr.appendChild(cancelBtn);
+		panel.appendChild(hdr);
 
-		function renderQuestion(index) {
-			menuPanel.innerHTML = "";
-			const q = questions[index];
-			const sel = selections[index];
-			const isMulti = Boolean(q.multi);
+		const body = document.createElement("div");
+		body.className = "menu-body";
+		const qText = document.createElement("div");
+		qText.className = "ask-question";
+		qText.textContent = q?.question || "";
+		body.appendChild(qText);
 
-			const hdr = document.createElement("div");
-			hdr.className = "menu-hdr";
-			const title = document.createElement("div");
-			title.className = "menu-title";
-			title.textContent = questions.length > 1 ? `Question ${index + 1}/${questions.length}` : "Choose an option";
-			const cancelBtn = document.createElement("button");
-			cancelBtn.className = "menu-mini";
-			cancelBtn.textContent = "Cancel";
-			cancelBtn.addEventListener("click", () => close(true));
-			hdr.appendChild(title);
-			hdr.appendChild(cancelBtn);
-			menuPanel.appendChild(hdr);
-
-			const body = document.createElement("div");
-			body.className = "menu-body";
-
-			const qText = document.createElement("div");
-			qText.className = "ask-question";
-			qText.textContent = q.question;
-			body.appendChild(qText);
-
-			if (q.description && q.description.trim()) {
-				const desc = document.createElement("div");
-				desc.className = "ask-desc";
-				desc.textContent = q.description;
-				body.appendChild(desc);
-			}
-
-			const hint = document.createElement("div");
-			hint.className = "ask-hint";
-			hint.textContent = isMulti ? "Select one or more. Tap Cancel to leave this dialog." : "Choose one option. Tap Cancel to leave this dialog.";
-			body.appendChild(hint);
-
-			const list = document.createElement("div");
-			list.className = "menu-list ask-options";
-
-			for (let oi = 0; oi < q.options.length; oi++) {
-				const opt = q.options[oi];
-				const label = typeof opt === "string" ? opt : opt.label;
-				const isRecommended = typeof q.recommended === "number" && q.recommended === oi;
-				const item = document.createElement("div");
-				item.className = "menu-item ask-option";
-				if (sel.selectedOptions.includes(label)) item.classList.add("active");
-
-				const row = document.createElement("div");
-				row.className = "ask-option-row";
-				const marker = document.createElement("span");
-				marker.className = "ask-option-marker";
-				marker.textContent = sel.selectedOptions.includes(label) ? "●" : "•";
-				const primary = document.createElement("div");
-				primary.className = "primary ask-option-primary";
-				primary.textContent = label;
-				row.appendChild(marker);
-				row.appendChild(primary);
-				item.appendChild(row);
-				if (isRecommended) {
-					const badge = document.createElement("div");
-					badge.className = "secondary ask-option-secondary";
-					badge.textContent = "Recommended";
-					item.appendChild(badge);
-				}
-
-				item.addEventListener("click", () => {
-					if (isMulti) {
-						const idx = sel.selectedOptions.indexOf(label);
-						if (idx >= 0) sel.selectedOptions.splice(idx, 1);
-						else sel.selectedOptions.push(label);
-						renderQuestion(index);
-					} else {
-						sel.selectedOptions = [label];
-						sel.customInput = undefined;
-						if (questions.length === 1) {
-							finish(false, selections);
-						} else {
-							renderQuestion(index);
-						}
-					}
-				});
-				list.appendChild(item);
-			}
-
-			const otherItem = document.createElement("div");
-			otherItem.className = "menu-item ask-option ask-option-other";
-			if (sel.customInput !== undefined) otherItem.classList.add("active");
-			const otherRow = document.createElement("div");
-			otherRow.className = "ask-option-row";
-			const otherMarker = document.createElement("span");
-			otherMarker.className = "ask-option-marker";
-			otherMarker.textContent = sel.customInput !== undefined ? "●" : "•";
-			const otherPrimary = document.createElement("div");
-			otherPrimary.className = "primary ask-option-primary";
-			otherPrimary.textContent = OTHER_OPTION;
-			otherRow.appendChild(otherMarker);
-			otherRow.appendChild(otherPrimary);
-			otherItem.appendChild(otherRow);
-			const otherSecondary = document.createElement("div");
-			otherSecondary.className = "secondary ask-option-secondary";
-			otherSecondary.textContent = sel.customInput !== undefined ? `Custom: ${sel.customInput}` : "Type your own answer";
-			otherItem.appendChild(otherSecondary);
-			otherItem.addEventListener("click", () => {
-				const input = window.prompt("Your answer:");
-				if (input !== null && input.trim()) {
-					sel.customInput = input.trim();
-					if (!isMulti) sel.selectedOptions = [];
-					if (questions.length === 1 && !isMulti) {
-						finish(false, selections);
-					} else {
-						renderQuestion(index);
-					}
-				}
-			});
-			list.appendChild(otherItem);
-			body.appendChild(list);
-
-			if (isMulti || questions.length > 1) {
-				const nav = document.createElement("div");
-				nav.className = "ask-nav";
-
-				if (questions.length > 1 && index > 0) {
-					const prev = document.createElement("button");
-					prev.className = "menu-mini";
-					prev.textContent = "← Previous";
-					prev.addEventListener("click", () => renderQuestion(index - 1));
-					nav.appendChild(prev);
-				}
-
-				const spacer = document.createElement("div");
-				spacer.style.flex = "1";
-				nav.appendChild(spacer);
-
-				if (questions.length > 1 && index < questions.length - 1) {
-					const next = document.createElement("button");
-					next.className = "menu-mini";
-					next.textContent = "Next →";
-					next.addEventListener("click", () => renderQuestion(index + 1));
-					nav.appendChild(next);
-				} else {
-					const submit = document.createElement("button");
-					submit.className = "menu-mini";
-					submit.style.background = "#1e2a20";
-					submit.style.borderColor = "#2a3a2a";
-					submit.style.color = "#b5bd68";
-					submit.textContent = "Submit";
-					submit.addEventListener("click", () => finish(false, selections));
-					nav.appendChild(submit);
-				}
-
-				body.appendChild(nav);
-			}
-
-			menuPanel.appendChild(body);
+		if (q?.description && q.description.trim()) {
+			const desc = document.createElement("div");
+			desc.className = "ask-desc";
+			desc.textContent = q.description;
+			body.appendChild(desc);
 		}
 
-		renderQuestion(0);
+		const hint = document.createElement("div");
+		hint.className = "ask-hint";
+		hint.textContent = isMulti ? "Select one or more. You can switch sessions and come back later." : "Choose one option. You can switch sessions and come back later.";
+		body.appendChild(hint);
+
+		const list = document.createElement("div");
+		list.className = "menu-list ask-options";
+		for (let oi = 0; oi < (q?.options?.length || 0); oi += 1) {
+			const opt = q.options[oi];
+			const label = typeof opt === "string" ? opt : opt?.label;
+			if (!label) continue;
+			const isRecommended = typeof q.recommended === "number" && q.recommended === oi;
+			const item = document.createElement("div");
+			item.className = "menu-item ask-option";
+			if (sel.selectedOptions.includes(label)) item.classList.add("active");
+
+			const row = document.createElement("div");
+			row.className = "ask-option-row";
+			const marker = document.createElement("span");
+			marker.className = "ask-option-marker";
+			marker.textContent = sel.selectedOptions.includes(label) ? "●" : "•";
+			const primary = document.createElement("div");
+			primary.className = "primary ask-option-primary";
+			primary.textContent = label;
+			row.appendChild(marker);
+			row.appendChild(primary);
+			item.appendChild(row);
+			if (isRecommended) {
+				const badge = document.createElement("div");
+				badge.className = "secondary ask-option-secondary";
+				badge.textContent = "Recommended";
+				item.appendChild(badge);
+			}
+
+			item.addEventListener("click", () => {
+				if (isMulti) {
+					persistCustomDraft();
+					const idx = sel.selectedOptions.indexOf(label);
+					if (idx >= 0) sel.selectedOptions.splice(idx, 1);
+					else sel.selectedOptions.push(label);
+					renderCurrent();
+					return;
+				}
+				sel.selectedOptions = [label];
+				sel.customInput = undefined;
+				dialog.customEditor = null;
+				if (questionCount === 1) {
+					finish(dialog, false, dialog.selections.map((entry) => cloneSelection(entry)));
+					return;
+				}
+				renderCurrent();
+			});
+			list.appendChild(item);
+		}
+
+		const otherItem = document.createElement("div");
+		otherItem.className = "menu-item ask-option ask-option-other";
+		if (sel.customInput !== undefined || isEditingCustom) otherItem.classList.add("active");
+		const otherRow = document.createElement("div");
+		otherRow.className = "ask-option-row";
+		const otherMarker = document.createElement("span");
+		otherMarker.className = "ask-option-marker";
+		otherMarker.textContent = sel.customInput !== undefined || isEditingCustom ? "●" : "•";
+		const otherPrimary = document.createElement("div");
+		otherPrimary.className = "primary ask-option-primary";
+		otherPrimary.textContent = OTHER_OPTION;
+		otherRow.appendChild(otherMarker);
+		otherRow.appendChild(otherPrimary);
+		otherItem.appendChild(otherRow);
+		const otherSecondary = document.createElement("div");
+		otherSecondary.className = "secondary ask-option-secondary";
+		otherSecondary.textContent = sel.customInput !== undefined
+			? `Custom: ${sel.customInput}`
+			: isEditingCustom
+				? "Enter your own answer below"
+				: "Type your own answer";
+		otherItem.appendChild(otherSecondary);
+		otherItem.addEventListener("click", () => {
+			if (!isMulti) sel.selectedOptions = [];
+			dialog.customEditor = {
+				questionId: editorQuestionId,
+				draft: dialog.customEditor?.questionId === editorQuestionId
+					? dialog.customEditor.draft
+					: sel.customInput || "",
+			};
+			renderCurrent();
+		});
+		list.appendChild(otherItem);
+		body.appendChild(list);
+
+		if (isEditingCustom) {
+			const customEditor = document.createElement("div");
+			customEditor.className = "ask-custom-editor";
+			const customInput = document.createElement("textarea");
+			customInput.className = "ask-custom-input";
+			customInput.rows = 3;
+			customInput.placeholder = "Type your answer here";
+			customInput.value = dialog.customEditor?.draft || "";
+			customInput.addEventListener("input", () => {
+				persistCustomDraft(customInput.value);
+			});
+			customInput.addEventListener("keydown", (event) => {
+				if (event.key === "Escape") {
+					event.preventDefault();
+					closeCustomEditor();
+					renderCurrent();
+					return;
+				}
+				if (sendOnEnter) {
+					if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
+						event.preventDefault();
+						if (questionCount > 1 && index < questionCount - 1) goToQuestion(index + 1);
+						else submitSelections();
+					}
+					return;
+				}
+				if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !event.shiftKey) {
+					event.preventDefault();
+					if (questionCount > 1 && index < questionCount - 1) goToQuestion(index + 1);
+					else submitSelections();
+				}
+			});
+			customEditor.appendChild(customInput);
+			body.appendChild(customEditor);
+
+			requestAnimationFrame(() => {
+				customInput.focus();
+				const end = customInput.value.length;
+				customInput.setSelectionRange(end, end);
+			});
+		}
+
+		if (isMulti || questionCount > 1 || isEditingCustom || sel.customInput !== undefined) {
+			const nav = document.createElement("div");
+			nav.className = "ask-nav";
+			if (questionCount > 1 && index > 0) {
+				const prev = document.createElement("button");
+				prev.className = "menu-mini";
+				prev.textContent = "← Previous";
+				prev.addEventListener("click", () => {
+					goToQuestion(index - 1);
+				});
+				nav.appendChild(prev);
+			}
+
+			const spacer = document.createElement("div");
+			spacer.style.flex = "1";
+			nav.appendChild(spacer);
+
+			if (questionCount > 1 && index < questionCount - 1) {
+				const next = document.createElement("button");
+				next.className = "menu-mini";
+				next.textContent = "Next →";
+				next.addEventListener("click", () => {
+					goToQuestion(index + 1);
+				});
+				nav.appendChild(next);
+			} else {
+				const submit = document.createElement("button");
+				submit.className = "menu-mini";
+				submit.style.background = "#1e2a20";
+				submit.style.borderColor = "#2a3a2a";
+				submit.style.color = "#b5bd68";
+				submit.textContent = "Submit";
+				submit.addEventListener("click", () => submitSelections());
+				nav.appendChild(submit);
+			}
+			body.appendChild(nav);
+		}
+
+		panel.appendChild(body);
 	}
 
-	return { show, close, isOpen: () => Boolean(activeDialog) };
+	function setActiveSession(sessionId, controller) {
+		const nextSessionId = typeof sessionId === "string" && sessionId.trim() ? sessionId.trim() : null;
+		const nextController = Boolean(controller);
+		if (nextSessionId === activeSessionId && nextController === isController) return;
+		activeSessionId = nextSessionId;
+		isController = nextController;
+		renderCurrent();
+	}
+
+	function show(sessionId, askId, questions, onSubmit) {
+		if (!sessionId || typeof askId !== "string" || !Array.isArray(questions)) return;
+		const existing = dialogs.get(sessionId);
+		if (existing && existing.askId === askId) {
+			const previousQuestions = existing.questions;
+			const previousSelections = existing.selections;
+			existing.questions = questions;
+			existing.selections = mergeSelections(previousQuestions, previousSelections, questions);
+			existing.currentIndex = Math.max(0, Math.min(existing.currentIndex, Math.max(0, questions.length - 1)));
+			existing.onSubmit = onSubmit;
+		} else {
+			dialogs.set(sessionId, {
+				sessionId,
+				askId,
+				questions,
+				selections: questions.map(() => emptySelection()),
+				currentIndex: 0,
+				customEditor: null,
+				onSubmit,
+			});
+		}
+		if (sessionId === activeSessionId) renderCurrent();
+	}
+
+	return {
+		show,
+		close,
+		setActiveSession,
+		isOpen: (sessionId) => (typeof sessionId === "string" ? dialogs.has(sessionId) : Boolean(getVisibleDialog())),
+	};
 }

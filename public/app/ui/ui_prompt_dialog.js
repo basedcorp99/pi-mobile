@@ -44,11 +44,21 @@ export function createUiPromptDialog({ menuOverlay, menuScrim, menuPanel }) {
 			item.className = "menu-item";
 			const primary = document.createElement("div");
 			primary.className = "primary";
-			primary.textContent = option;
+			const label = typeof option === "string"
+				? option
+				: typeof option?.label === "string"
+					? option.label
+					: String(option?.label ?? option?.value ?? "");
+			const value = typeof option === "string"
+				? option
+				: typeof option?.value === "string"
+					? option.value
+					: label;
+			primary.textContent = label;
 			item.appendChild(primary);
 			item.addEventListener("click", () => {
 				close();
-				onSubmit(uiId, false, option);
+				onSubmit(uiId, false, value);
 			});
 			list.appendChild(item);
 		}
