@@ -1,11 +1,15 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import { execFile, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { randomUUID, X509Certificate } from "node:crypto";
 import { PiWebRuntime, type SessionClient } from "./session-runtime.ts";
 import { FaceIdService } from "./faceid.ts";
 import { PushService } from "./push.ts";
 import { transcribeAudio } from "./voice.ts";
+
+// Resolve pi-subagents from npm global root (avoid hardcoding /usr/lib/...)
+const _npmGlobalRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf-8" }).trim();
+const { discoverAgentsAll } = await import(join(_npmGlobalRoot, "pi-subagents", "agents.ts"));
 import type {
 	ApiCommandRequest,
 	ApiActiveSessionsResponse,
@@ -652,7 +656,6 @@ Bun.serve({
 
 		if (req.method === "GET" && url.pathname === "/api/agents") {
 			try {
-				const { discoverAgentsAll } = await import("/usr/lib/node_modules/pi-subagents/agents.ts");
 				const cwd = url.searchParams.get("cwd") || process.cwd();
 				const data = discoverAgentsAll(cwd);
 				const agents = [...(data.user || []), ...(data.project || []), ...(data.builtin || [])]

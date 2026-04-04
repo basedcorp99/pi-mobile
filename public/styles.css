@@ -224,7 +224,7 @@
 	    .menu-panel {
 	      position: absolute;
 	      min-width: 320px;
-	      max-width: min(520px, 92vw);
+	      max-width: min(680px, 98vw);
 	      max-height: min(520px, 70vh);
 	      overflow: auto;
 	      background: #12121a;
@@ -519,7 +519,7 @@
 	      color: #808080;
 	      font-size: 12px;
 	    }
-	    @media (max-width: 540px) {
+	    @media (max-width: 740px) {
 	      .agent-launcher-select-row {
 	        flex-direction: column;
 	      }
