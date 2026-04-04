@@ -656,7 +656,7 @@ Bun.serve({
 				const cwd = url.searchParams.get("cwd") || process.cwd();
 				const data = discoverAgentsAll(cwd);
 				const agents = [...(data.user || []), ...(data.project || []), ...(data.builtin || [])]
-					.map((a: any) => ({ name: a.name, description: a.description || "", scope: a.scope || "builtin" }));
+					.map((a: any) => ({ name: a.name, description: a.description || "", scope: a.scope || "builtin", model: a.model || null }));
 				return json({ agents }, 200);
 			} catch {
 				return json({ agents: [] }, 200);

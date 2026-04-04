@@ -154,6 +154,7 @@ export function createMenu({
 		if (!menuOverlay || !menuPanel) return;
 		open = true;
 		menuOverlay.classList.add("open");
+		delete menuOverlay.dataset.locked;
 		menuPanel.innerHTML = "";
 		menuPanel.style.left = "0px";
 		menuPanel.style.top = "0px";
@@ -197,7 +198,6 @@ export function createMenu({
 
 	async function openModelMenu() {
 		if (!btnModel || btnModel.disabled) return;
-		if (menuOverlay) menuOverlay.dataset.locked = "1";
 		openMenu(btnModel, (panel) => {
 			const hdr = document.createElement("div");
 			hdr.className = "menu-hdr";

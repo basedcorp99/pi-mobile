@@ -17,7 +17,7 @@ function agentToken(step) {
 function makeStep(agents = []) {
 	return {
 		agent: agents[0]?.name || "",
-		model: "",
+		model: "", // empty = agent default
 		task: "",
 	};
 }
@@ -107,30 +107,19 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit, get
 			return;
 		}
 
+		// Agents now include .model (agent default model or null)
 		const agents = sortByLabel((Array.isArray(agentData?.agents) ? agentData.agents : []).map((agent) => ({
 			name: agent.name,
 			label: agent.name,
 			description: agent.description || "",
 			scope: agent.scope || "builtin",
+			model: agent.model || null,
 		})));
 		const models = sortByLabel((Array.isArray(modelData?.models) ? modelData.models : []).map((model) => ({
 			value: `${model.provider}/${model.id}`,
 			label: model.name || model.id,
 			secondary: `${model.provider}/${model.id}`,
 		})));
-		const describeModelValue = (value) => {
-			const selected = models.find((model) => model.value === value);
-			if (selected) return `${selected.label} · ${selected.secondary}`;
-			return value || "Unknown model";
-		};
-		const describeSessionModel = () => {
-			const sessionModel = getActiveState?.()?.model || null;
-			if (!sessionModel) return "Session default model";
-			const value = `${sessionModel.provider}/${sessionModel.id}`;
-			const selected = models.find((model) => model.value === value);
-			if (selected) return `${selected.label} · ${selected.secondary}`;
-			return `${sessionModel.name ? `${sessionModel.name} · ` : ""}${value}`;
-		};
 
 		if (agents.length === 0) {
 			body.textContent = "No subagents found.";
@@ -149,6 +138,7 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit, get
 			while (steps.length < 2) steps.push(makeStep(agents));
 		};
 
+		// --- Build the native <select> for picking an agent ---
 		const buildAgentSelect = (value, onChange) => {
 			const select = document.createElement("select");
 			select.className = "agent-launcher-select";
@@ -163,20 +153,54 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit, get
 			return select;
 		};
 
-		const buildModelSelect = (value, onChange) => {
+		// --- Build the native <select> for model with Default + Session + all models ---
+		const buildModelSelect = (agentName, value, onChange) => {
 			const select = document.createElement("select");
 			select.className = "agent-launcher-select";
-			const defaultOption = document.createElement("option");
-			defaultOption.value = "";
-			defaultOption.textContent = `Session default · ${describeSessionModel()}`;
-			select.appendChild(defaultOption);
-			for (const model of models) {
+
+			const agentInfo = agents.find((a) => a.name === agentName);
+			const activeModel = getActiveState?.()?.model || null;
+			const fallbackModel = activeModel ? `${activeModel.provider}/${activeModel.id}` : null;
+			const defaultModelLabel = agentInfo?.model
+				? `Default (${agentInfo.model})`
+				: fallbackModel
+					? `Default (${fallbackModel})`
+					: "Default";
+
+			// Option 1: Default – don't override
+			const defaultOpt = document.createElement("option");
+			defaultOpt.value = "";
+			defaultOpt.textContent = defaultModelLabel;
+			if (!value) defaultOpt.selected = true;
+			select.appendChild(defaultOpt);
+
+			// Option 2: Current session model (if available and different from agent default)
+			const sessionModel = getActiveState?.()?.model || null;
+			if (sessionModel) {
+				const sessionKey = `${sessionModel.provider}/${sessionModel.id}`;
+				const sessionLabel = sessionModel.name || sessionModel.id;
+				const sessionOpt = document.createElement("option");
+				sessionOpt.value = sessionKey;
+				sessionOpt.textContent = `⚡ Session: ${sessionLabel} (${sessionKey})`;
+				if (value === sessionKey) sessionOpt.selected = true;
+				select.appendChild(sessionOpt);
+			}
+
+			// Separator
+			const sep = document.createElement("option");
+			sep.disabled = true;
+			sep.textContent = "────────────";
+			select.appendChild(sep);
+
+			// All other models
+			for (const m of models) {
 				const option = document.createElement("option");
-				option.value = model.value;
-				option.textContent = `${model.label} · ${model.secondary}`;
-				if (model.value === value) option.selected = true;
+				option.value = m.value;
+				option.textContent = `${m.label}  ·  ${m.secondary}`;
+				if (m.value === value) option.selected = true;
 				select.appendChild(option);
 			}
+
 			select.addEventListener("change", () => onChange(select.value));
 			return select;
 		};
@@ -231,16 +255,61 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit, get
 				}
 				card.appendChild(stepHdr);
 
-				const grid = document.createElement("div");
-				grid.className = "agent-launcher-grid";
+				// --- Single row: Agent (left half) + Model (right half) ---
+				const selectRow = document.createElement("div");
+				selectRow.className = "agent-launcher-select-row";
 
+				const agentField = document.createElement("label");
+				agentField.className = "agent-launcher-field";
+				agentField.appendChild(Object.assign(document.createElement("span"), { className: "agent-launcher-label", textContent: "Agent" }));
+
+				let modelSelectEl = null;
+
+				const rebuildModelSelect = () => {
+					const newSelect = buildModelSelect(step.agent, step.model, (value) => {
+						step.model = value;
+						updateMeta();
+						updatePreview();
+					});
+					if (modelSelectEl) {
+						modelSelectEl.replaceWith(newSelect);
+					}
+					modelSelectEl = newSelect;
+					return newSelect;
+				};
+
+				agentField.appendChild(buildAgentSelect(step.agent, (value) => {
+					step.agent = value;
+					rebuildModelSelect();
+					updateMeta();
+					updatePreview();
+				}));
+				selectRow.appendChild(agentField);
+
+				const modelField = document.createElement("label");
+				modelField.className = "agent-launcher-field";
+				modelField.appendChild(Object.assign(document.createElement("span"), { className: "agent-launcher-label", textContent: "Model" }));
+				modelSelectEl = buildModelSelect(step.agent, step.model, (value) => {
+					step.model = value;
+					updateMeta();
+					updatePreview();
+				});
+				modelField.appendChild(modelSelectEl);
+				selectRow.appendChild(modelField);
+
+				card.appendChild(selectRow);
+
+				// --- Meta (agent description + model info) ---
 				const meta = document.createElement("div");
 				meta.className = "agent-launcher-meta";
 				const updateMeta = () => {
 					const agentInfo = agents.find((item) => item.name === step.agent);
 					const lines = [];
 					if (agentInfo?.description) lines.push(agentInfo.description);
-					lines.push(step.model ? `Uses override model: ${describeModelValue(step.model)}` : `Uses session default model: ${describeSessionModel()}`);
+					if (step.model) {
+						const m = models.find((m) => m.value === step.model);
+						lines.push(`Model override: ${m ? `${m.label} · ${m.secondary}` : step.model}`);
+					}
 					meta.innerHTML = "";
 					for (const line of lines) {
 						const row = document.createElement("div");
@@ -249,28 +318,7 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit, get
 					}
 				};
 
-				const agentField = document.createElement("label");
-				agentField.className = "agent-launcher-field";
-				agentField.appendChild(Object.assign(document.createElement("span"), { className: "agent-launcher-label", textContent: "Agent" }));
-				agentField.appendChild(buildAgentSelect(step.agent, (value) => {
-					step.agent = value;
-					updateMeta();
-					updatePreview();
-				}));
-				grid.appendChild(agentField);
-
-				const modelField = document.createElement("label");
-				modelField.className = "agent-launcher-field";
-				modelField.appendChild(Object.assign(document.createElement("span"), { className: "agent-launcher-label", textContent: "Model override" }));
-				modelField.appendChild(buildModelSelect(step.model, (value) => {
-					step.model = value;
-					updateMeta();
-					updatePreview();
-				}));
-				grid.appendChild(modelField);
-
-				card.appendChild(grid);
-
+				// --- Task textarea ---
 				const taskField = document.createElement("label");
 				taskField.className = "agent-launcher-field";
 				taskField.appendChild(Object.assign(document.createElement("span"), { className: "agent-launcher-label", textContent: "Task" }));

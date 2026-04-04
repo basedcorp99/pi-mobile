@@ -449,10 +449,14 @@
 	      font-size: 12px;
 	      font-weight: 600;
 	    }
-	    .agent-launcher-grid {
-	      display: grid;
-	      grid-template-columns: repeat(2, minmax(0, 1fr));
+	    .agent-launcher-select-row {
+	      display: flex;
 	      gap: 10px;
+	      min-width: 0;
+	    }
+	    .agent-launcher-select-row > .agent-launcher-field {
+	      flex: 1 1 0;
+	      min-width: 0;
 	    }
 	    .agent-launcher-field {
 	      display: flex;
@@ -491,6 +495,14 @@
 	      line-height: 1.35;
 	      min-height: 15px;
 	    }
+	    .agent-launcher-check input[type="checkbox"] {
+	      width: 16px;
+	      height: 16px;
+	      margin: 0;
+	      accent-color: #7aa6da;
+	      cursor: pointer;
+	      flex: 0 0 auto;
+	    }
 	    .agent-launcher-add {
 	      align-self: flex-start;
 	    }
@@ -506,6 +518,11 @@
 	      gap: 6px;
 	      color: #808080;
 	      font-size: 12px;
+	    }
+	    @media (max-width: 540px) {
+	      .agent-launcher-select-row {
+	        flex-direction: column;
+	      }
 	    }
 	    .agent-launcher-preview {
 	      border: 1px dashed #2a2a32;
@@ -1254,7 +1271,7 @@
     @media (max-width: 740px) {
       .sidebar { width: 180px; }
       .top-btn span.txt { display: none; }
-      .agent-launcher-grid { grid-template-columns: 1fr; }
+      .agent-launcher-select-row { flex-direction: column; }
       .agent-launcher-actions {
         flex-direction: column-reverse;
         align-items: stretch;
