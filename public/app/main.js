@@ -900,32 +900,34 @@ let voiceRecordingMode = null;
 let voiceUiReady = false;
 let voiceRecorder = null;
 
+function updateVoiceButtonState() {
+	if (btnVoice && voiceRecorder) {
+		const rec = voiceRecorder.isRecording();
+		const trans = voiceRecorder.isTranscribing();
+		if (!rec) voiceRecordingMode = null;
+		btnVoice.classList.toggle("recording", rec);
+		btnVoice.classList.toggle("transcribing", voiceUiReady && trans);
+		btnVoice.classList.toggle("pending", !voiceUiReady && !rec);
+		btnVoice.disabled = trans || !voiceUiReady;
+		btnVoice.textContent = !voiceUiReady ? "\uD83C\uDF99" : trans ? "⏳" : "\uD83C\uDF99";
+		btnVoice.title = !voiceUiReady
+			? "Voice loading…"
+			: trans
+				? "Transcribing…"
+				: rec
+					? (voiceRecordingMode === "hold" ? "Release to stop" : "Tap to stop")
+					: voiceInputMode === VOICE_INPUT_MODE_AUTO_SEND
+						? "Tap or hold to record and auto-send"
+						: "Tap or hold to record";
+	}
+}
+
 voiceRecorder = createVoiceRecorder({
 	api,
 	onTranscription: handleVoiceTranscription,
 	onJobQueued: handleQueuedVoiceJob,
 	onNotice: sessionCtrl.appendNotice,
-	onStateChange: () => {
-		if (btnVoice && voiceRecorder) {
-			const rec = voiceRecorder.isRecording();
-			const trans = voiceRecorder.isTranscribing();
-			if (!rec) voiceRecordingMode = null;
-			btnVoice.classList.toggle("recording", rec);
-			btnVoice.classList.toggle("transcribing", voiceUiReady && trans);
-			btnVoice.classList.toggle("pending", !voiceUiReady && !rec);
-			btnVoice.disabled = trans || !voiceUiReady;
-			btnVoice.textContent = !voiceUiReady ? "\uD83C\uDF99" : trans ? "⏳" : "\uD83C\uDF99";
-			btnVoice.title = !voiceUiReady
-				? "Voice loading…"
-				: trans
-					? "Transcribing…"
-					: rec
-						? (voiceRecordingMode === "hold" ? "Release to stop" : "Tap to stop")
-						: voiceInputMode === VOICE_INPUT_MODE_AUTO_SEND
-							? "Tap or hold to record and auto-send"
-							: "Tap or hold to record";
-		}
-	},
+	onStateChange: updateVoiceButtonState,
 });
 void voiceRecorder.resumePending({ silent: true }).finally(() => {
 	voiceUiReady = true;
@@ -945,6 +947,8 @@ document.addEventListener("visibilitychange", () => {
 	if (document.visibilityState === "visible" && voiceWasHidden) {
 		voiceWasHidden = false;
 		resumePendingVoiceIfPossible();
+		// Force refresh voice button state in case transcribing finished while app was hidden
+		updateVoiceButtonState();
 	}
 });
 
