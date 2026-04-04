@@ -502,10 +502,13 @@ async function handleVoiceTranscription(text, job = null) {
 			? job.images.filter((image) => image && typeof image === "object")
 			: [];
 		rememberPromptHistory(sessionId, transcript);
-		return Boolean(await sessionCtrl.sendPromptToSession(sessionId, transcript, images, {
+		// Fire-and-forget: don't block voice transcribing state on prompt delivery.
+		// The job already has the transcript saved in IndexedDB, so it won't be re-transcribed.
+		void sessionCtrl.sendPromptToSession(sessionId, transcript, images, {
 			optimistic: sessionId === sessionCtrl.getActiveSessionId(),
 			errorLabel: "Failed to send voice note",
-		}));
+		});
+		return true;
 	}
 	if (document.visibilityState !== "visible" || input.disabled) return false;
 	return appendTranscriptToComposer(transcript);
@@ -721,7 +724,6 @@ const sessionCtrl = createSessionController({
 		syncPromptHistoryState();
 		updateFooter();
 		updateControls();
-		resumePendingVoiceIfPossible();
 		void pushCtrl?.syncActivity?.();
 	},
 	onCloseMenu: () => {
