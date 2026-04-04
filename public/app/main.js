@@ -374,6 +374,7 @@ function updateControls() {
 	const phone = isPhoneLike();
 	const actionBusy = sessionCtrl.getActionBusy ? sessionCtrl.getActionBusy() : null;
 	const canChangeSettings = hasSession && isController && !streaming && !actionBusy;
+	if (!isController && menuOverlay?.dataset?.kind === "ask") askDialog?.close?.();
 
 	btnAbort.disabled = !hasSession || Boolean(actionBusy && actionBusy !== "abort" && actionBusy !== "bash");
 	btnTakeover.disabled = !hasSession || Boolean(actionBusy);
@@ -459,10 +460,14 @@ async function sendPromptFromInput() {
 function closeOpenOverlays() {
 	let closed = false;
 	if (menuOverlay?.classList?.contains("open")) {
-		menuCtrl?.close?.();
-		askDialog?.close?.();
-		uiPromptDialog?.close?.();
-		agentLauncher?.close?.();
+		if (menuOverlay?.dataset?.kind === "ask") {
+			askDialog?.close?.(true);
+		} else {
+			menuCtrl?.close?.();
+			askDialog?.close?.();
+			uiPromptDialog?.close?.();
+			agentLauncher?.close?.();
+		}
 		closed = true;
 	}
 	if (sidebar?.classList?.contains("open")) {
@@ -496,6 +501,7 @@ const sessionCtrl = createSessionController({
 	onSidebarClose: () => sidebarCtrl?.setOpen(false),
 	onSidebarRefresh: () => sidebarCtrl?.refresh(),
 	onAskRequest: (askId, questions) => {
+		if (!sessionCtrl.isController()) return;
 		if (askDialog) {
 			askDialog.show(askId, questions, (id, cancelled, selections) => {
 				void sessionCtrl.sendAskResponse(id, cancelled, selections);

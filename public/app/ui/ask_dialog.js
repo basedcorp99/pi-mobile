@@ -1,7 +1,9 @@
 const OTHER_OPTION = "Other (provide your own answer)";
 
 export function createAskDialog({ menuOverlay, menuScrim, menuPanel }) {
-	function close() {
+	let activeDialog = null;
+
+	function resetUi() {
 		if (menuOverlay) {
 			menuOverlay.classList.remove("open");
 			delete menuOverlay.dataset.locked;
@@ -19,11 +21,26 @@ export function createAskDialog({ menuOverlay, menuScrim, menuPanel }) {
 		}
 	}
 
+	function close(cancelled = false) {
+		const current = activeDialog;
+		activeDialog = null;
+		resetUi();
+		if (cancelled && current) {
+			current.onSubmit(current.askId, true, []);
+		}
+	}
+
 	function show(askId, questions, onSubmit) {
 		if (!menuOverlay || !menuPanel) return;
+		close(false);
+		activeDialog = { askId, onSubmit };
 
 		const selections = questions.map(() => ({ selectedOptions: [], customInput: undefined }));
-		let currentTab = 0;
+		const finish = (cancelled, answerSelections) => {
+			activeDialog = null;
+			resetUi();
+			onSubmit(askId, cancelled, answerSelections);
+		};
 
 		menuOverlay.classList.add("open");
 		menuOverlay.dataset.locked = "1";
@@ -43,7 +60,6 @@ export function createAskDialog({ menuOverlay, menuScrim, menuPanel }) {
 			const sel = selections[index];
 			const isMulti = Boolean(q.multi);
 
-			// Header
 			const hdr = document.createElement("div");
 			hdr.className = "menu-hdr";
 			const title = document.createElement("div");
@@ -52,25 +68,19 @@ export function createAskDialog({ menuOverlay, menuScrim, menuPanel }) {
 			const cancelBtn = document.createElement("button");
 			cancelBtn.className = "menu-mini";
 			cancelBtn.textContent = "Cancel";
-			cancelBtn.addEventListener("click", () => {
-				close();
-				onSubmit(askId, true, []);
-			});
+			cancelBtn.addEventListener("click", () => close(true));
 			hdr.appendChild(title);
 			hdr.appendChild(cancelBtn);
 			menuPanel.appendChild(hdr);
 
-			// Body
 			const body = document.createElement("div");
 			body.className = "menu-body";
 
-			// Question text
 			const qText = document.createElement("div");
 			qText.className = "ask-question";
 			qText.textContent = q.question;
 			body.appendChild(qText);
 
-			// Description
 			if (q.description && q.description.trim()) {
 				const desc = document.createElement("div");
 				desc.className = "ask-desc";
@@ -83,7 +93,6 @@ export function createAskDialog({ menuOverlay, menuScrim, menuPanel }) {
 			hint.textContent = isMulti ? "Select one or more. Tap Cancel to leave this dialog." : "Choose one option. Tap Cancel to leave this dialog.";
 			body.appendChild(hint);
 
-			// Options list
 			const list = document.createElement("div");
 			list.className = "menu-list ask-options";
 
@@ -123,8 +132,7 @@ export function createAskDialog({ menuOverlay, menuScrim, menuPanel }) {
 						sel.selectedOptions = [label];
 						sel.customInput = undefined;
 						if (questions.length === 1) {
-							close();
-							onSubmit(askId, false, selections);
+							finish(false, selections);
 						} else {
 							renderQuestion(index);
 						}
@@ -133,7 +141,6 @@ export function createAskDialog({ menuOverlay, menuScrim, menuPanel }) {
 				list.appendChild(item);
 			}
 
-			// Other option
 			const otherItem = document.createElement("div");
 			otherItem.className = "menu-item ask-option ask-option-other";
 			if (sel.customInput !== undefined) otherItem.classList.add("active");
@@ -158,8 +165,7 @@ export function createAskDialog({ menuOverlay, menuScrim, menuPanel }) {
 					sel.customInput = input.trim();
 					if (!isMulti) sel.selectedOptions = [];
 					if (questions.length === 1 && !isMulti) {
-						close();
-						onSubmit(askId, false, selections);
+						finish(false, selections);
 					} else {
 						renderQuestion(index);
 					}
@@ -168,7 +174,6 @@ export function createAskDialog({ menuOverlay, menuScrim, menuPanel }) {
 			list.appendChild(otherItem);
 			body.appendChild(list);
 
-			// Navigation / Submit buttons for multi or multi-question
 			if (isMulti || questions.length > 1) {
 				const nav = document.createElement("div");
 				nav.className = "ask-nav";
@@ -198,10 +203,7 @@ export function createAskDialog({ menuOverlay, menuScrim, menuPanel }) {
 					submit.style.borderColor = "#2a3a2a";
 					submit.style.color = "#b5bd68";
 					submit.textContent = "Submit";
-					submit.addEventListener("click", () => {
-						close();
-						onSubmit(askId, false, selections);
-					});
+					submit.addEventListener("click", () => finish(false, selections));
 					nav.appendChild(submit);
 				}
 
@@ -214,5 +216,5 @@ export function createAskDialog({ menuOverlay, menuScrim, menuPanel }) {
 		renderQuestion(0);
 	}
 
-	return { show, close };
+	return { show, close, isOpen: () => Boolean(activeDialog) };
 }

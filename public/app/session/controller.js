@@ -30,11 +30,20 @@ export function createSessionController({
 	let suspendedForBackground = false;
 	let connectGraceUntil = 0;
 	let lostSessionTimer = null;
+	let resumeTimer = null;
+	let resumeGeneration = 0;
 
 	let pendingPrompt = false;
 	let actionBusy = null;
 
 	const chatView = createChatView({ msgsEl, isPhoneLikeFn });
+
+	function clearResumeTimer() {
+		if (resumeTimer) {
+			clearTimeout(resumeTimer);
+			resumeTimer = null;
+		}
+	}
 
 	function closeEvents() {
 		if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
@@ -152,6 +161,8 @@ export function createSessionController({
 	}
 
 	function handleSessionLost() {
+		resumeGeneration += 1;
+		clearResumeTimer();
 		closeEvents();
 		const oldId = activeSessionId;
 		activeSessionId = null;
@@ -169,14 +180,22 @@ export function createSessionController({
 
 	function resumeAfterBackground() {
 		if (!activeSessionId) return;
+		const generation = ++resumeGeneration;
+		clearResumeTimer();
 		reconnectAttempts = 0;
 		suspendedForBackground = false;
-		setTimeout(() => {
-			if (!activeSessionId) return;
+		resumeTimer = setTimeout(() => {
+			resumeTimer = null;
+			if (!activeSessionId || document.visibilityState !== "visible" || generation !== resumeGeneration) return;
 			void refreshState({ silent: true, syncMessages: false }).finally(() => {
-				if (activeSessionId) connectEvents(activeSessionId);
-				setTimeout(() => {
-					if (activeSessionId && document.visibilityState === "visible") void refreshState({ silent: true, syncMessages: false });
+				if (!activeSessionId || document.visibilityState !== "visible" || generation !== resumeGeneration) return;
+				connectEvents(activeSessionId);
+				clearResumeTimer();
+				resumeTimer = setTimeout(() => {
+					resumeTimer = null;
+					if (activeSessionId && document.visibilityState === "visible" && generation === resumeGeneration) {
+						void refreshState({ silent: true, syncMessages: false });
+					}
 				}, 1500);
 			});
 		}, 250);
@@ -184,6 +203,8 @@ export function createSessionController({
 
 	function suspendForBackground() {
 		if (!activeSessionId) return;
+		resumeGeneration += 1;
+		clearResumeTimer();
 		suspendedForBackground = true;
 		closeEvents();
 	}
@@ -261,6 +282,8 @@ export function createSessionController({
 		if (event.type === "released") {
 			onCloseMenu();
 			const cmd = lastCliCommand;
+			resumeGeneration += 1;
+			clearResumeTimer();
 			closeEvents();
 			activeSessionId = null;
 			activeState = null;
@@ -276,6 +299,7 @@ export function createSessionController({
 		}
 
 		if (event.type === "ask_request") {
+			if (controllerClientId !== clientId) return;
 			if (typeof onAskRequest === "function") {
 				onAskRequest(event.askId, event.questions);
 			}
@@ -283,6 +307,7 @@ export function createSessionController({
 		}
 
 		if (event.type === "ui_select") {
+			if (controllerClientId !== clientId) return;
 			if (typeof onUiSelect === "function") {
 				onUiSelect(event.uiId, event.title, event.options);
 			}
@@ -290,6 +315,7 @@ export function createSessionController({
 		}
 
 		if (event.type === "ui_input") {
+			if (controllerClientId !== clientId) return;
 			if (typeof onUiInput === "function") {
 				onUiInput(event.uiId, event.title, event.placeholder);
 			}
@@ -297,6 +323,7 @@ export function createSessionController({
 		}
 
 		if (event.type === "ui_confirm") {
+			if (controllerClientId !== clientId) return;
 			if (typeof onUiConfirm === "function") {
 				onUiConfirm(event.uiId, event.title, event.message);
 			}
@@ -479,24 +506,46 @@ export function createSessionController({
 
 	async function sendAskResponse(askId, cancelled, selections) {
 		if (!activeSessionId) return;
-		await api.postJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/command`, {
-			type: "ask_response",
-			clientId,
-			askId,
-			cancelled,
-			selections,
-		});
+		try {
+			await api.postJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/command`, {
+				type: "ask_response",
+				clientId,
+				askId,
+				cancelled,
+				selections,
+			});
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			if (msg.includes("Not controller") || msg.includes("not_controller")) {
+				await refreshState({ silent: true, syncMessages: false });
+				chatView.appendNotice("This question moved to another client.", "warning");
+				return;
+			}
+			if (isSessionGoneError(error)) { handleSessionLost(); return; }
+			chatView.appendNotice(msg, "error");
+		}
 	}
 
 	async function sendUiResponse(uiId, cancelled, value) {
 		if (!activeSessionId) return;
-		await api.postJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/command`, {
-			type: "ui_response",
-			clientId,
-			uiId,
-			cancelled,
-			value,
-		});
+		try {
+			await api.postJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/command`, {
+				type: "ui_response",
+				clientId,
+				uiId,
+				cancelled,
+				value,
+			});
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			if (msg.includes("Not controller") || msg.includes("not_controller")) {
+				await refreshState({ silent: true, syncMessages: false });
+				chatView.appendNotice("This prompt moved to another client.", "warning");
+				return;
+			}
+			if (isSessionGoneError(error)) { handleSessionLost(); return; }
+			chatView.appendNotice(msg, "error");
+		}
 	}
 
 	async function runBash(commandText, options = {}) {

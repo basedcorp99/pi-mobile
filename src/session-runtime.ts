@@ -17,6 +17,7 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type {
+	ApiAskQuestion,
 	ApiCommandRequest,
 	ApiCreateSessionRequest,
 	ApiModelInfo,
@@ -95,7 +96,9 @@ async function createSessionWithWorktreeGuard(opts: {
 // ---------------------------------------------------------------------------
 
 export interface SessionClient {
+	connectionId: string;
 	clientId: string;
+	connectedAtMs: number;
 	send(event: SseEvent): void;
 	close(): void;
 }
@@ -343,11 +346,15 @@ function serializeSessionSummary(entry: {
 interface PendingAsk {
 	resolve: (value: { cancelled?: boolean; selections: Array<{ selectedOptions: string[]; customInput?: string }> }) => void;
 	sessionId: string;
+	questions: ApiAskQuestion[];
 }
+
+type PendingUiPromptEvent = Extract<SseEvent, { type: "ui_select" | "ui_input" | "ui_confirm" }>;
 
 interface PendingUiPrompt {
 	resolve: (value: string | undefined) => void;
 	sessionId: string;
+	event: PendingUiPromptEvent;
 }
 
 export class PiWebRuntime {
@@ -367,6 +374,74 @@ export class PiWebRuntime {
 		// Instead we wrap the ask tool's execute after each session is created.
 	}
 
+	private getClientConnections(runtime: RunningSession, clientId: string): SessionClient[] {
+		return [...runtime.clients.values()]
+			.filter((client) => client.clientId === clientId)
+			.sort((a, b) => b.connectedAtMs - a.connectedAtMs);
+	}
+
+	private getPreferredClientConnection(runtime: RunningSession, clientId: string): SessionClient | null {
+		return this.getClientConnections(runtime, clientId)[0] ?? null;
+	}
+
+	private sendToConnection(sessionId: string, connectionId: string, event: SseEvent): boolean {
+		const runtime = this.runningById.get(sessionId);
+		if (!runtime) return false;
+		const client = runtime.clients.get(connectionId);
+		if (!client) return false;
+		try {
+			client.send(event);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	private sendToClient(sessionId: string, clientId: string, event: SseEvent): boolean {
+		const runtime = this.runningById.get(sessionId);
+		if (!runtime) return false;
+		for (const client of this.getClientConnections(runtime, clientId)) {
+			if (this.sendToConnection(sessionId, client.connectionId, event)) return true;
+		}
+		return false;
+	}
+
+	private sendToController(sessionId: string, event: SseEvent): boolean {
+		const runtime = this.runningById.get(sessionId);
+		if (!runtime?.controllerClientId) return false;
+		return this.sendToClient(sessionId, runtime.controllerClientId, event);
+	}
+
+	replayPendingDialogs(sessionId: string, connectionId: string): void {
+		const runtime = this.runningById.get(sessionId);
+		if (!runtime) return;
+		const client = runtime.clients.get(connectionId);
+		if (!client) return;
+		if (runtime.controllerClientId !== client.clientId) return;
+
+		for (const [askId, pending] of this.pendingAsks.entries()) {
+			if (pending.sessionId !== sessionId) continue;
+			this.sendToConnection(sessionId, connectionId, {
+				type: "ask_request",
+				askId,
+				questions: pending.questions,
+			});
+		}
+
+		for (const pending of this.pendingUiPrompts.values()) {
+			if (pending.sessionId !== sessionId) continue;
+			this.sendToConnection(sessionId, connectionId, pending.event);
+		}
+	}
+
+	private replayPendingDialogsToController(sessionId: string): void {
+		const runtime = this.runningById.get(sessionId);
+		if (!runtime?.controllerClientId) return;
+		const client = this.getPreferredClientConnection(runtime, runtime.controllerClientId);
+		if (!client) return;
+		this.replayPendingDialogs(sessionId, client.connectionId);
+	}
+
 	private wrapAskTool(session: AgentSession, sessionId: string): void {
 		const runner = (session as any)._extensionRunner;
 		if (!runner) return;
@@ -379,14 +454,22 @@ export class PiWebRuntime {
 			const originalExecute = askTool.definition.execute;
 			const self = this;
 			askTool.definition.execute = async function (toolCallId: string, params: any, signal: any, onUpdate: any, ctx: any) {
-				// Intercept: broadcast ask to web clients and wait for response
 				if (params?.questions?.length > 0) {
 					const askId = randomUUID();
-					self.broadcast(sessionId, {
-						type: "ask_request",
-						askId,
-						questions: params.questions,
-					});
+					const questions: ApiAskQuestion[] = Array.isArray(params.questions)
+						? params.questions.map((q: any) => ({
+							id: typeof q?.id === "string" ? q.id : "",
+							question: typeof q?.question === "string" ? q.question : "",
+							...(typeof q?.description === "string" && q.description.trim() ? { description: q.description } : {}),
+							options: Array.isArray(q?.options)
+								? q.options
+									.map((o: any) => ({ label: typeof o?.label === "string" ? o.label : String(o?.label ?? "") }))
+									.filter((o: { label: string }) => o.label.length > 0)
+								: [],
+							...(typeof q?.multi === "boolean" ? { multi: q.multi } : {}),
+							...(typeof q?.recommended === "number" && Number.isFinite(q.recommended) ? { recommended: q.recommended } : {}),
+						}))
+						: [];
 
 					const result = await new Promise<{ cancelled?: boolean; selections: Array<{ selectedOptions: string[]; customInput?: string }> }>((resolve) => {
 						let done = false;
@@ -402,14 +485,14 @@ export class PiWebRuntime {
 							}
 							resolve(value);
 						};
-						self.pendingAsks.set(askId, { resolve: finish, sessionId });
+						self.pendingAsks.set(askId, { resolve: finish, sessionId, questions });
+						self.sendToController(sessionId, { type: "ask_request", askId, questions });
 						timeout = setTimeout(() => finish({ cancelled: true, selections: [] }), 5 * 60 * 1000);
 						if (signal?.aborted) finish({ cancelled: true, selections: [] });
 						else if (signal && typeof signal.addEventListener === "function") signal.addEventListener("abort", onAbort, { once: true });
 					});
 
-					// Build response in the same format the ask extension expects
-					const results = params.questions.map((q: any, i: number) => {
+					const results = questions.map((q: any, i: number) => {
 						const sel = result.selections[i] ?? { selectedOptions: [] };
 						return {
 							id: q.id,
@@ -431,27 +514,26 @@ export class PiWebRuntime {
 
 					return {
 						content: [{ type: "text", text: `User answers:\n${summaryLines}` }],
-						details: params.questions.length === 1 ? results[0] : { results },
+						details: questions.length === 1 ? results[0] : { results },
 					};
 				}
 
-				// Fallback to original
 				return originalExecute.call(this, toolCallId, params, signal, onUpdate, ctx);
 			};
 			break;
 		}
 	}
 
-	resolveAsk(askId: string, cancelled: boolean, selections: Array<{ selectedOptions: string[]; customInput?: string }>): void {
+	resolveAsk(sessionId: string, askId: string, cancelled: boolean, selections: Array<{ selectedOptions: string[]; customInput?: string }>): void {
 		const pending = this.pendingAsks.get(askId);
-		if (!pending) return;
+		if (!pending || pending.sessionId !== sessionId) return;
 		this.pendingAsks.delete(askId);
 		pending.resolve({ cancelled, selections });
 	}
 
-	resolveUiPrompt(uiId: string, cancelled: boolean, value?: string): void {
+	resolveUiPrompt(sessionId: string, uiId: string, cancelled: boolean, value?: string): void {
 		const pending = this.pendingUiPrompts.get(uiId);
-		if (!pending) return;
+		if (!pending || pending.sessionId !== sessionId) return;
 		this.pendingUiPrompts.delete(uiId);
 		pending.resolve(cancelled ? undefined : value);
 	}
@@ -474,9 +556,10 @@ export class PiWebRuntime {
 		return {
 			async select(title: string, options: string[]): Promise<string | undefined> {
 				const uiId = randomUUID();
-				self.broadcast(sessionId, { type: "ui_select", uiId, title, options });
+				const event: PendingUiPromptEvent = { type: "ui_select", uiId, title, options };
 				return new Promise<string | undefined>((resolve) => {
-					self.pendingUiPrompts.set(uiId, { resolve, sessionId });
+					self.pendingUiPrompts.set(uiId, { resolve, sessionId, event });
+					self.sendToController(sessionId, event);
 					setTimeout(() => {
 						if (self.pendingUiPrompts.has(uiId)) {
 							self.pendingUiPrompts.delete(uiId);
@@ -487,9 +570,10 @@ export class PiWebRuntime {
 			},
 			async confirm(title: string, message: string): Promise<boolean> {
 				const uiId = randomUUID();
-				self.broadcast(sessionId, { type: "ui_confirm", uiId, title, message });
+				const event: PendingUiPromptEvent = { type: "ui_confirm", uiId, title, message };
 				const result = await new Promise<string | undefined>((resolve) => {
-					self.pendingUiPrompts.set(uiId, { resolve, sessionId });
+					self.pendingUiPrompts.set(uiId, { resolve, sessionId, event });
+					self.sendToController(sessionId, event);
 					setTimeout(() => {
 						if (self.pendingUiPrompts.has(uiId)) {
 							self.pendingUiPrompts.delete(uiId);
@@ -501,9 +585,10 @@ export class PiWebRuntime {
 			},
 			async input(title: string, placeholder?: string): Promise<string | undefined> {
 				const uiId = randomUUID();
-				self.broadcast(sessionId, { type: "ui_input", uiId, title, placeholder });
+				const event: PendingUiPromptEvent = { type: "ui_input", uiId, title, placeholder };
 				return new Promise<string | undefined>((resolve) => {
-					self.pendingUiPrompts.set(uiId, { resolve, sessionId });
+					self.pendingUiPrompts.set(uiId, { resolve, sessionId, event });
+					self.sendToController(sessionId, event);
 					setTimeout(() => {
 						if (self.pendingUiPrompts.has(uiId)) {
 							self.pendingUiPrompts.delete(uiId);
@@ -525,9 +610,10 @@ export class PiWebRuntime {
 			setTitle() {},
 			async editor(title: string, defaultValue?: string): Promise<string | undefined> {
 				const uiId = randomUUID();
-				self.broadcast(sessionId, { type: "ui_input", uiId, title, placeholder: defaultValue });
+				const event: PendingUiPromptEvent = { type: "ui_input", uiId, title, placeholder: defaultValue };
 				return new Promise<string | undefined>((resolve) => {
-					self.pendingUiPrompts.set(uiId, { resolve, sessionId });
+					self.pendingUiPrompts.set(uiId, { resolve, sessionId, event });
+					self.sendToController(sessionId, event);
 					setTimeout(() => {
 						if (self.pendingUiPrompts.has(uiId)) {
 							self.pendingUiPrompts.delete(uiId);
@@ -727,14 +813,14 @@ export class PiWebRuntime {
 		if (!runtime) {
 			throw new Error("session_not_running");
 		}
-		runtime.clients.set(client.clientId, client);
+		runtime.clients.set(client.connectionId, client);
 		return this.getSessionRole(sessionId, client.clientId);
 	}
 
-	removeClient(sessionId: string, clientId: string): void {
+	removeClient(sessionId: string, connectionId: string): void {
 		const runtime = this.runningById.get(sessionId);
 		if (!runtime) return;
-		runtime.clients.delete(clientId);
+		runtime.clients.delete(connectionId);
 	}
 
 	async startSession(request: ApiCreateSessionRequest): Promise<{ sessionId: string }> {
@@ -810,17 +896,19 @@ export class PiWebRuntime {
 		}
 
 		if (command.type === "ask_response") {
+			this.assertController(runtime, command.clientId);
 			const askId = typeof command.askId === "string" ? command.askId.trim() : "";
 			if (!askId) throw new Error("missing_ask_id");
 			const selections = Array.isArray(command.selections) ? command.selections : [];
-			this.resolveAsk(askId, Boolean(command.cancelled), selections);
+			this.resolveAsk(sessionId, askId, Boolean(command.cancelled), selections);
 			return;
 		}
 
 		if (command.type === "ui_response") {
+			this.assertController(runtime, command.clientId);
 			const uiId = typeof command.uiId === "string" ? command.uiId.trim() : "";
 			if (!uiId) throw new Error("missing_ui_id");
-			this.resolveUiPrompt(uiId, Boolean(command.cancelled), command.value);
+			this.resolveUiPrompt(sessionId, uiId, Boolean(command.cancelled), command.value);
 			return;
 		}
 
@@ -969,6 +1057,7 @@ export class PiWebRuntime {
 		}
 		runtime.controllerClientId = request.clientId;
 		this.broadcast(sessionId, { type: "controller_changed", controllerClientId: request.clientId });
+		this.replayPendingDialogsToController(sessionId);
 	}
 
 	async release(sessionId: string, request: { clientId: string }): Promise<void> {

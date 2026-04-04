@@ -935,8 +935,11 @@ Bun.serve({
 			}
 
 			const stream = createSseStream(req.signal);
+			const connectionId = randomUUID();
 			const client: SessionClient = {
+				connectionId,
 				clientId,
+				connectedAtMs: Date.now(),
 				send: stream.send,
 				close: stream.close,
 			};
@@ -961,11 +964,12 @@ Bun.serve({
 				role,
 			};
 			stream.send(init);
+			runtime.replayPendingDialogs(sessionId, connectionId);
 
 			req.signal.addEventListener(
 				"abort",
 				() => {
-					runtime.removeClient(sessionId, clientId);
+					runtime.removeClient(sessionId, connectionId);
 				},
 				{ once: true },
 			);
