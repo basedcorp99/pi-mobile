@@ -634,11 +634,11 @@ export function createMenu({
 				}));
 				const nextSend = getStreamingSendMode() === "steer" ? "followUp" : "steer";
 				body.appendChild(makeSetting({
-					name: "Stiling",
-					value: getStreamingSendMode() === "steer" ? "Interrupt" : "Queue",
+					name: "Send while streaming",
+					value: getStreamingSendMode() === "steer" ? "Steering" : "Follow-up",
 					description: getStreamingSendMode() === "steer"
-						? "Enter sends immediately and interrupts the agent."
-						: "Enter queues the message and waits for the agent to finish.",
+						? "Steering: sends immediately and interrupts the agent."
+						: "Follow-up: queues the message until the agent finishes.",
 					active: getStreamingSendMode() === "followUp",
 					onClick: () => {
 						setStreamingSendMode(nextSend);
