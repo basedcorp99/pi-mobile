@@ -109,3 +109,11 @@ export function setStreamingSendMode(mode) {
 	safeLocalStorageSet("piWebStreamingSendMode", mode === "followUp" ? "followUp" : "steer");
 }
 
+export function getDeliveryMode() {
+	return safeLocalStorageGet("piWebDeliveryMode") === "all" ? "all" : "one-at-a-time";
+}
+
+export function setDeliveryMode(mode) {
+	safeLocalStorageSet("piWebDeliveryMode", mode === "all" ? "all" : "one-at-a-time");
+}
+

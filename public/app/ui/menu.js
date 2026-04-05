@@ -1,4 +1,4 @@
-import { getStreamingSendMode, setStreamingSendMode } from "../core/storage.js";
+import { getDeliveryMode, getStreamingSendMode, setDeliveryMode, setStreamingSendMode } from "../core/storage.js";
 
 function normalizeForSearch(text) {
 	return String(text || "")
@@ -615,30 +615,17 @@ export function createMenu({
 				note.appendChild(secondary);
 				body.appendChild(note);
 			} else {
-				const nextSteering = prefs.steeringMode === "all" ? "one-at-a-time" : "all";
+				const nextDelivery = getDeliveryMode() === "all" ? "one-at-a-time" : "all";
 				body.appendChild(makeSetting({
-					name: "Steering mode",
-					value: prefs.steeringMode || "one-at-a-time",
-					description: "Tap to toggle between delivering all queued steering messages or one at a time.",
-					active: prefs.steeringMode === "all",
+					name: "Delivery",
+					value: getDeliveryMode() === "all" ? "All at once" : "One at a time",
+					description: "How queued messages are delivered: one at a time or all together.",
+					active: getDeliveryMode() === "all",
 					onClick: async () => {
 						try {
-							if (typeof onSetSteeringMode === "function") await onSetSteeringMode(nextSteering);
-							renderSettings();
-						} catch (error) {
-							onNotice(error instanceof Error ? error.message : String(error), "error");
-						}
-					},
-				}));
-				const nextFollow = prefs.followUpMode === "all" ? "one-at-a-time" : "all";
-				body.appendChild(makeSetting({
-					name: "Follow-up mode",
-					value: prefs.followUpMode || "one-at-a-time",
-					description: "Tap to toggle how follow-up queued prompts are delivered after the agent finishes.",
-					active: prefs.followUpMode === "all",
-					onClick: async () => {
-						try {
-							if (typeof onSetFollowUpMode === "function") await onSetFollowUpMode(nextFollow);
+							setDeliveryMode(nextDelivery);
+							if (typeof onSetSteeringMode === "function") await onSetSteeringMode(nextDelivery);
+							if (typeof onSetFollowUpMode === "function") await onSetFollowUpMode(nextDelivery);
 							renderSettings();
 						} catch (error) {
 							onNotice(error instanceof Error ? error.message : String(error), "error");
@@ -647,7 +634,7 @@ export function createMenu({
 				}));
 				const nextSend = getStreamingSendMode() === "steer" ? "followUp" : "steer";
 				body.appendChild(makeSetting({
-					name: "Send while streaming",
+					name: "Stiling",
 					value: getStreamingSendMode() === "steer" ? "Interrupt" : "Queue",
 					description: getStreamingSendMode() === "steer"
 						? "Enter sends immediately and interrupts the agent."
