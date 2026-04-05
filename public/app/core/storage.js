@@ -101,3 +101,11 @@ export function setVoiceInputMode(mode) {
 	safeLocalStorageSet("piWebVoiceInputMode", mode === "auto-send" ? "auto-send" : "compose");
 }
 
+export function getStreamingSendMode() {
+	return safeLocalStorageGet("piWebStreamingSendMode") === "followUp" ? "followUp" : "steer";
+}
+
+export function setStreamingSendMode(mode) {
+	safeLocalStorageSet("piWebStreamingSendMode", mode === "followUp" ? "followUp" : "steer");
+}
+

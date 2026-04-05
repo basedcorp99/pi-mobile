@@ -1,3 +1,5 @@
+import { getStreamingSendMode, setStreamingSendMode } from "../core/storage.js";
+
 function normalizeForSearch(text) {
 	return String(text || "")
 		.toLowerCase()
@@ -641,6 +643,19 @@ export function createMenu({
 						} catch (error) {
 							onNotice(error instanceof Error ? error.message : String(error), "error");
 						}
+					},
+				}));
+				const nextSend = getStreamingSendMode() === "steer" ? "followUp" : "steer";
+				body.appendChild(makeSetting({
+					name: "Send while streaming",
+					value: getStreamingSendMode() === "steer" ? "Interrupt" : "Queue",
+					description: getStreamingSendMode() === "steer"
+						? "Enter sends immediately and interrupts the agent."
+						: "Enter queues the message and waits for the agent to finish.",
+					active: getStreamingSendMode() === "followUp",
+					onClick: () => {
+						setStreamingSendMode(nextSend);
+						renderSettings();
 					},
 				}));
 			}

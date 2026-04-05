@@ -9,11 +9,13 @@ import {
 	getFontScalePreference,
 	getOrCreateClientId,
 	getSendOnEnterEnabled,
+	getStreamingSendMode,
 	getThemePreference,
 	getToken,
 	getVoiceInputMode,
 	setFontScalePreference,
 	setSendOnEnterEnabled,
+	setStreamingSendMode,
 	setThemePreference,
 	setVoiceInputMode,
 } from "./core/storage.js";
@@ -675,8 +677,10 @@ async function sendPromptFromInput() {
 	input.value = "";
 	autoResize(input);
 	clearAttachments();
+	const activeState = sessionCtrl.getActiveState?.();
+	const deliverAs = activeState?.isStreaming ? getStreamingSendMode() : undefined;
 	try {
-		await sessionCtrl.sendPrompt(text, images);
+		await sessionCtrl.sendPrompt(text, images, { deliverAs });
 		return true;
 	} catch (error) {
 		pendingAttachments = snapshot;

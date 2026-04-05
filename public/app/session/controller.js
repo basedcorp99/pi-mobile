@@ -600,12 +600,13 @@ export function createSessionController({
 		}
 	}
 
-	async function postPromptCommand(sessionId, text, images) {
+	async function postPromptCommand(sessionId, text, images, options = {}) {
 		await api.postJson(`/api/sessions/${encodeURIComponent(sessionId)}/command`, {
 			type: "prompt",
 			clientId,
 			text,
 			images,
+			...(options.deliverAs && { deliverAs: options.deliverAs }),
 		});
 	}
 
@@ -645,7 +646,7 @@ export function createSessionController({
 		}
 
 		try {
-			await postPromptCommand(targetSessionId, text, images);
+			await postPromptCommand(targetSessionId, text, images, options);
 			await finishActivePrompt();
 			return true;
 		} catch (error) {
@@ -657,7 +658,7 @@ export function createSessionController({
 						controllerClientId = clientId;
 						role = "controller";
 					}
-					await postPromptCommand(targetSessionId, text, images);
+					await postPromptCommand(targetSessionId, text, images, options);
 					await finishActivePrompt();
 					return true;
 				} catch (retryError) {
@@ -688,9 +689,9 @@ export function createSessionController({
 		}
 	}
 
-	async function sendPrompt(text, images = []) {
+	async function sendPrompt(text, images = [], options = {}) {
 		if (!activeSessionId) return false;
-		return await sendPromptToSession(activeSessionId, text, images, { optimistic: true });
+		return await sendPromptToSession(activeSessionId, text, images, { optimistic: true, ...options });
 	}
 
 	async function compact(customInstructions) {
