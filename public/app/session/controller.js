@@ -37,7 +37,6 @@ export function createSessionController({
 
 	let pendingPrompt = false;
 	let actionBusy = null;
-	let lastSteeringMessage = null; // { text, images } — set when sending a prompt while streaming
 
 	const chatView = createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt });
 
@@ -271,7 +270,6 @@ export function createSessionController({
 				Object.assign(activeState, event.patch);
 				if (event.patch.isStreaming === false) {
 					pendingPrompt = false;
-					lastSteeringMessage = null;
 					if (actionBusy === "abort") actionBusy = null;
 					if (activeSessionId) void refreshState({ silent: true, syncMessages: true });
 				}
@@ -635,10 +633,8 @@ export function createSessionController({
 			return true;
 		};
 
-		const wasSteering = targetIsActive && Boolean(activeState?.isStreaming);
 		if (targetIsActive) {
 			pendingPrompt = true;
-			if (wasSteering) lastSteeringMessage = { text, images };
 			if (options.optimistic !== false) {
 				chatView.appendOptimisticUserMessage([
 					...(text ? [{ type: "text", text }] : []),
@@ -650,7 +646,6 @@ export function createSessionController({
 
 		try {
 			await postPromptCommand(targetSessionId, text, images);
-			lastSteeringMessage = null;
 			await finishActivePrompt();
 			return true;
 		} catch (error) {
@@ -751,10 +746,8 @@ export function createSessionController({
 		const hadAssistant = chatView.hasAssistant();
 		const hadStreaming = Boolean(activeState?.isStreaming);
 		const shouldShowNotice = Boolean(hadStreaming || pendingPrompt || hadAssistant || hadPendingTools);
-		const savedSteering = lastSteeringMessage;
 		actionBusy = "abort";
 		pendingPrompt = false;
-		lastSteeringMessage = null;
 		if (activeState) activeState.isStreaming = false;
 		onStateChange();
 		chatView.markPendingToolsAborted("Operation aborted");
@@ -769,10 +762,6 @@ export function createSessionController({
 		}
 		if (shouldShowNotice && !hadPendingTools && !hadAssistant && !hadStreaming) {
 			chatView.appendNotice("Operation aborted", "error");
-		}
-		// Re-send steering message that was lost due to abort
-		if (savedSteering && activeSessionId) {
-			await sendPromptToSession(activeSessionId, savedSteering.text, savedSteering.images, { optimistic: false });
 		}
 	}
 
