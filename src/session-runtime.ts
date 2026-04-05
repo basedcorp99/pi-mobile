@@ -980,7 +980,7 @@ export class PiWebRuntime {
 			await runtime.session.prompt(
 				text,
 				wasStreaming
-					? { ...(promptOptions ?? {}), streamingBehavior: command.deliverAs ?? "followUp" }
+					? { ...(promptOptions ?? {}), streamingBehavior: command.deliverAs ?? "steer" }
 					: promptOptions,
 			);
 			// If prompt returned without starting an agent run (e.g. extension
