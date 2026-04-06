@@ -355,10 +355,22 @@ export function createSidebar({
 			const sortedDirs = [...byDir.keys()].sort((a, b) => shortPath(a).localeCompare(shortPath(b)));
 			for (const dir of sortedDirs) {
 				const sessions = byDir.get(dir);
+				const hdrWrap = document.createElement("div");
+				hdrWrap.className = "sidebar-group-hdr-wrap";
 				const hdr = document.createElement("div");
 				hdr.className = "sidebar-group-hdr";
 				hdr.textContent = shortPath(dir);
-				sessionsList.appendChild(hdr);
+				hdrWrap.appendChild(hdr);
+				const addBtn = document.createElement("button");
+				addBtn.className = "sidebar-group-add";
+				addBtn.textContent = "+";
+				addBtn.title = "New session in this folder";
+				addBtn.addEventListener("click", (e) => {
+					e.stopPropagation();
+					void showNewSessionInFolder(dir);
+				});
+				hdrWrap.appendChild(addBtn);
+				sessionsList.appendChild(hdrWrap);
 				for (const s of sessions) sessionsList.appendChild(renderSessionRow(s));
 			}
 		}
@@ -381,10 +393,22 @@ export function createSidebar({
 			const sortedRepos = [...byRepo.keys()].sort((a, b) => shortPath(a).localeCompare(shortPath(b)));
 			for (const repoRoot of sortedRepos) {
 				const sessions = byRepo.get(repoRoot);
+				const hdrWrap = document.createElement("div");
+				hdrWrap.className = "sidebar-group-hdr-wrap";
 				const hdr = document.createElement("div");
 				hdr.className = "sidebar-group-hdr";
 				hdr.textContent = shortPath(repoRoot);
-				sessionsList.appendChild(hdr);
+				hdrWrap.appendChild(hdr);
+				const addBtn = document.createElement("button");
+				addBtn.className = "sidebar-group-add";
+				addBtn.textContent = "+";
+				addBtn.title = "New worktree session";
+				addBtn.addEventListener("click", (e) => {
+					e.stopPropagation();
+					void showWorktreeForm(repoRoot, true);
+				});
+				hdrWrap.appendChild(addBtn);
+				sessionsList.appendChild(hdrWrap);
 				for (const s of sessions) sessionsList.appendChild(renderSessionRow(s));
 			}
 		}
@@ -619,6 +643,19 @@ export function createSidebar({
 		}
 	}
 
+	async function showNewSessionInFolder(cwd) {
+		// Check if it's a git repo to offer worktree option
+		try {
+			const gitCheck = await api.getJson(`/api/is-git-repo?path=${encodeURIComponent(cwd)}`);
+			if (gitCheck?.isGitRepo) {
+				void showWorktreeChoice(cwd);
+				return;
+			}
+		} catch { /* non-git, proceed with normal session */ }
+		// Not a git repo, just create normal session
+		void startNormalSession(cwd);
+	}
+
 	function showWorktreeChoice(cwd) {
 		viewMode = "picker";
 		sessionsList.innerHTML = "";
@@ -651,16 +688,18 @@ export function createSidebar({
 		sessionsList.appendChild(wtBtn);
 	}
 
-	async function showWorktreeForm(cwd) {
+	async function showWorktreeForm(cwd, skipBackButton = false) {
 		viewMode = "picker";
 		sessionsList.innerHTML = "";
 		if (sidebarLabel) sidebarLabel.textContent = "New Worktree";
 
-		const backBtn = document.createElement("div");
-		backBtn.className = "si si-new";
-		backBtn.innerHTML = `<div class="si-name">← Back</div>`;
-		backBtn.addEventListener("click", () => void showWorktreeChoice(cwd));
-		sessionsList.appendChild(backBtn);
+		if (!skipBackButton) {
+			const backBtn = document.createElement("div");
+			backBtn.className = "si si-new";
+			backBtn.innerHTML = `<div class="si-name">← Back</div>`;
+			backBtn.addEventListener("click", () => void showWorktreeChoice(cwd));
+			sessionsList.appendChild(backBtn);
+		}
 
 		const form = document.createElement("div");
 		form.style.cssText = "padding:8px 12px;display:flex;flex-direction:column;gap:10px;";
