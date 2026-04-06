@@ -751,8 +751,14 @@ const sessionCtrl = createSessionController({
 	onSidebarRefresh: () => sidebarCtrl?.refresh(),
 	onAskRequest: (sessionId, askId, questions) => {
 		if (!sessionCtrl.isController()) return;
+		// Mark session as needing attention if it's not the currently active one
+		if (sessionId !== sessionCtrl.getActiveSessionId?.()) {
+			sidebarCtrl?.markNeedsAttention?.(sessionId);
+		}
 		if (askDialog) {
 			askDialog.show(sessionId, askId, questions, (id, cancelled, selections) => {
+				// Clear attention when user responds
+				if (sessionId) sidebarCtrl?.clearAttention?.(sessionId);
 				void sessionCtrl.sendAskResponse(id, cancelled, selections);
 			});
 		}
@@ -784,6 +790,12 @@ const sessionCtrl = createSessionController({
 	onSessionEnded: (sessionId) => {
 		askDialog?.close?.(sessionId, false);
 	},
+	onUserTurn: (sessionId) => {
+		// Mark session as needing attention when assistant finishes responding
+		if (sessionId !== sessionCtrl.getActiveSessionId?.()) {
+			sidebarCtrl?.markNeedsAttention?.(sessionId);
+		}
+	},
 });
 
 sidebarCtrl = createSidebar({
@@ -800,11 +812,15 @@ sidebarCtrl = createSidebar({
 	onSelectSession: async (s) => {
 		await sessionCtrl.selectSession(s);
 		clearAttachments();
+		// Clear attention marker when user views the session
+		if (s?.id) sidebarCtrl?.clearAttention?.(s.id);
 	},
 	onSessionIdSelected: (sessionId) => {
 		sessionCtrl.openSessionId(sessionId);
 		clearAttachments();
 		updateControls();
+		// Clear attention marker when user opens the session
+		if (sessionId) sidebarCtrl?.clearAttention?.(sessionId);
 	},
 	onRenameSession: async (session, name) => {
 		if (!session) return;

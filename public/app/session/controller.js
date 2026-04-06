@@ -17,6 +17,7 @@ export function createSessionController({
 	onUiConfirm,
 	onReusePrompt,
 	onSessionEnded,
+	onUserTurn, // kept for direct notification when connected
 }) {
 	let activeSessionId = null;
 	let activeState = null;
@@ -274,6 +275,8 @@ export function createSessionController({
 					pendingPrompt = false;
 					if (actionBusy === "abort") actionBusy = null;
 					if (activeSessionId) void refreshState({ silent: true, syncMessages: true });
+					// Notify that it's user's turn (for notification badge in sidebar)
+					if (activeSessionId && typeof onUserTurn === "function") onUserTurn(activeSessionId);
 				}
 				onStateChange();
 			}

@@ -710,6 +710,7 @@ export class PiWebRuntime {
 				modified: toIso(runtime.modifiedAtMs),
 				messageCount: runtime.session.messages.length,
 				isRunning: true,
+				isStreaming: runtime.session.isStreaming ?? false,
 			});
 		}
 		sessions.sort((a, b) => b.modified.localeCompare(a.modified));

@@ -55,6 +55,7 @@ export interface ApiSessionSummary {
 	modified: string;
 	messageCount: number;
 	isRunning: boolean;
+	isStreaming?: boolean;
 }
 
 export interface ApiListSessionsResponse {

@@ -71,6 +71,9 @@ export function createSidebar({
 	let lastFetchedSessions = [];
 	let sessionSearchQuery = "";
 	let consecutiveRefreshFailures = 0;
+	const sessionsNeedingAttention = new Set(); // sessionIds with pending asks/notifications
+	const previouslyStreaming = new Set(); // sessionIds that were streaming last poll
+	let attentionPollTimer = null;
 
 	function resetDeleteButton(button) {
 		if (!button) return;
@@ -213,13 +216,20 @@ export function createSidebar({
 
 		const rel = formatRelativeTime(s.modified);
 		const runningIndicator = s.isRunning ? ` <span class="si-run">\u2022 running</span>` : "";
+		const needsAttention = sessionsNeedingAttention.has(s.id);
+		const attentionIndicator = needsAttention ? ` <span class="si-attention">🔔</span>` : "";
 
 		const name = document.createElement("div");
 		name.className = "si-name";
-		name.innerHTML = `${label}<span class="si-time">${rel}${runningIndicator}</span>`;
+		name.innerHTML = `${label}${attentionIndicator}`;
 		name.title = isWt ? `${wtName} — ${String(sessionLabel).slice(0, 60)}` : label;
 
+		const meta = document.createElement("div");
+		meta.className = "si-meta";
+		meta.innerHTML = `${rel}${runningIndicator}`;
+
 		row.appendChild(name);
+		row.appendChild(meta);
 
 		// Worktree-specific: merge button
 		if (isWt) {
@@ -408,6 +418,87 @@ export function createSidebar({
 				for (const s of sessions) sessionsList.appendChild(renderSessionRow(s));
 			}
 		}
+
+		// New Project button at the bottom
+		const newProjectBtn = document.createElement("div");
+		newProjectBtn.className = "si si-new";
+		newProjectBtn.style.marginTop = "16px";
+		newProjectBtn.innerHTML = `<div class="si-name">＋ New Project</div>`;
+		newProjectBtn.addEventListener("click", () => void showNewProjectDialog());
+		sessionsList.appendChild(newProjectBtn);
+	}
+
+	async function showNewProjectDialog() {
+		viewMode = "picker";
+		sessionsList.innerHTML = "";
+		if (sidebarLabel) sidebarLabel.textContent = "New Project";
+
+		const backBtn = document.createElement("div");
+		backBtn.className = "si si-new";
+		backBtn.innerHTML = `<div class="si-name">← Back</div>`;
+		backBtn.addEventListener("click", () => {
+			viewMode = "sessions";
+			if (sidebarLabel) sidebarLabel.textContent = "Sessions";
+			void refresh({ force: true });
+		});
+		sessionsList.appendChild(backBtn);
+
+		const form = document.createElement("div");
+		form.style.cssText = "padding:8px 12px;display:flex;flex-direction:column;gap:10px;";
+
+		const label = document.createElement("label");
+		label.className = "agent-launcher-label";
+		label.textContent = "Project name";
+		const input = document.createElement("input");
+		input.className = "sessions-search";
+		input.type = "text";
+		input.placeholder = "my-new-project";
+		label.appendChild(input);
+		form.appendChild(label);
+
+		const hint = document.createElement("div");
+		hint.className = "si-meta new-session-empty";
+		hint.style.cssText = "padding:0 12px;white-space:normal;word-wrap:break-word;";
+		hint.textContent = "Creates /root/{your-path} and opens a session";
+		form.appendChild(hint);
+
+		const createBtn = document.createElement("button");
+		createBtn.className = "new-btn";
+		createBtn.style.cssText = "padding:10px 14px;font-weight:600;justify-content:center;";
+		createBtn.textContent = "Create & Open Session";
+		createBtn.addEventListener("click", async () => {
+			const path = input.value.trim();
+			if (!path) { onNotice("Project name cannot be empty", "error"); return; }
+			if (path.startsWith("/") || path.includes("..") || path.startsWith("~")) {
+				onNotice("Invalid path. Just type the folder name (e.g., 'myproject')", "error");
+				return;
+			}
+			createBtn.disabled = true;
+			createBtn.textContent = "Creating...";
+			try {
+				const result = await api.postJson("/api/dirs/create", { path });
+				const cwd = result.path;
+				// Start session in the new directory
+				const sessionResult = await api.postJson("/api/sessions", { clientId, cwd, forceNew: true });
+				viewMode = "sessions";
+				onSessionIdSelected(sessionResult.sessionId);
+				setOpen(false);
+				// Refresh sidebar to show the new session
+				void refresh({ force: true });
+			} catch (err) {
+				createBtn.disabled = false;
+				createBtn.textContent = "Create & Open Session";
+				onNotice(err instanceof Error ? err.message : String(err), "error");
+			}
+		});
+		form.appendChild(createBtn);
+
+		input.addEventListener("keydown", (e) => {
+			if (e.key === "Enter") { e.preventDefault(); createBtn.click(); }
+		});
+
+		sessionsList.appendChild(form);
+		setTimeout(() => input.focus(), 0);
 	}
 
 	async function showNewSessionPicker() {
@@ -621,6 +712,8 @@ export function createSidebar({
 			viewMode = "sessions";
 			onSessionIdSelected(result.sessionId);
 			setOpen(false);
+			// Refresh sidebar to show the new session
+			void refresh({ force: true });
 		} catch (err) {
 			viewMode = "picker";
 			onNotice(err instanceof Error ? err.message : String(err), "error");
@@ -633,6 +726,8 @@ export function createSidebar({
 			viewMode = "sessions";
 			onSessionIdSelected(result.sessionId);
 			setOpen(false);
+			// Refresh sidebar to show the new session
+			void refresh({ force: true });
 		} catch (err) {
 			viewMode = "picker";
 			onNotice(err instanceof Error ? err.message : String(err), "error");
@@ -736,7 +831,7 @@ export function createSidebar({
 
 		const createBtn = document.createElement("button");
 		createBtn.className = "new-btn";
-		createBtn.style.cssText = "background:#1e2a20;border-color:#2a3a2a;color:#b5bd68;padding:10px 14px;font-weight:600;justify-content:center;";
+		createBtn.style.cssText = "padding:10px 14px;font-weight:600;justify-content:center;";
 		createBtn.textContent = "Create Worktree";
 		createBtn.addEventListener("click", async () => {
 			const name = nameInput.value.trim();
@@ -753,6 +848,8 @@ export function createSidebar({
 				viewMode = "sessions";
 				onSessionIdSelected(result.sessionId);
 				setOpen(false);
+				// Refresh sidebar to show the new session
+				void refresh({ force: true });
 			} catch (err) {
 				createBtn.disabled = false;
 				createBtn.textContent = "Create Worktree";
@@ -784,6 +881,18 @@ export function createSidebar({
 			]);
 			const active = Array.isArray(activeData.sessions) ? activeData.sessions : [];
 			const all = Array.isArray(allData.sessions) ? allData.sessions : [];
+
+			// Detect sessions that stopped streaming → mark as needing attention
+			const currentlyStreaming = new Set();
+			const activeSessionId = getActiveSessionId();
+			for (const s of active) {
+				if (s.isStreaming) currentlyStreaming.add(s.id);
+				else if (previouslyStreaming.has(s.id) && s.id !== activeSessionId) {
+					sessionsNeedingAttention.add(s.id);
+				}
+			}
+			previouslyStreaming.clear();
+			for (const id of currentlyStreaming) previouslyStreaming.add(id);
 
 			const seen = new Set();
 			const merged = [];
@@ -826,6 +935,12 @@ export function createSidebar({
 		btnSidebarRight.onclick = () => void showNewSessionPicker();
 	}
 
+	// Poll for session state changes (streaming → done) every 5s
+	attentionPollTimer = setInterval(() => {
+		if (viewMode !== "sessions") return;
+		void refresh();
+	}, 5_000);
+
 	return {
 		setOpen,
 		toggleOpen,
@@ -835,5 +950,23 @@ export function createSidebar({
 		isPickerOpen: () => viewMode === "picker",
 		setMode: () => {}, // compat
 		updateHeader: () => {}, // compat
+		markNeedsAttention: (sessionId) => {
+			if (sessionId && !sessionsNeedingAttention.has(sessionId)) {
+				sessionsNeedingAttention.add(sessionId);
+				void refresh({ force: true });
+			}
+		},
+		clearAttention: (sessionId) => {
+			if (sessionId && sessionsNeedingAttention.has(sessionId)) {
+				sessionsNeedingAttention.delete(sessionId);
+				void refresh({ force: true });
+			}
+		},
+		clearAllAttention: () => {
+			if (sessionsNeedingAttention.size > 0) {
+				sessionsNeedingAttention.clear();
+				void refresh({ force: true });
+			}
+		},
 	};
 }

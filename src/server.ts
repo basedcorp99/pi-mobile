@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { randomUUID, X509Certificate } from "node:crypto";
@@ -678,6 +679,25 @@ Bun.serve({
 			try {
 				const dirs = await fuzzyFindDirs(query.trim());
 				return json({ dirs }, 200);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return errorResponse(message, 500);
+			}
+		}
+
+		if (req.method === "POST" && url.pathname === "/api/dirs/create") {
+			const raw = (await requireJsonBody(req)) as { path?: string };
+			if (!raw?.path || typeof raw.path !== "string") {
+				return errorResponse("Missing path", 400);
+			}
+			// Security: ensure path is under /root
+			const fullPath = resolve("/root", raw.path);
+			if (!fullPath.startsWith("/root/") && fullPath !== "/root") {
+				return errorResponse("Path must be under /root", 403);
+			}
+			try {
+				await mkdir(fullPath, { recursive: true });
+				return json({ path: fullPath }, 200);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				return errorResponse(message, 500);

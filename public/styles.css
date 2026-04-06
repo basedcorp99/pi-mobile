@@ -616,19 +616,18 @@
     .new-session-empty { padding: 8px 0; }
     .si {
       display: flex; flex-direction: column;
-      padding: 7px 80px 7px 8px; border-radius: 6px; cursor: pointer;
+      padding: 5px 80px 5px 8px; border-radius: 6px; cursor: pointer;
       border: 1px solid transparent; transition: all .1s;
       min-width: 0;
     }
     .si:hover { background: #1e1e28; }
     .si.active { background: #1e2a20; border-color: #2a3a2a; }
-    .si-name { display:flex; align-items:center; justify-content:space-between; font-size: 12px; color: #d4d4d4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; gap:8px; }
-    .si-name > span { flex-shrink:0; }
-    .si-time { font-size: 10px; color: #606060; font-weight: 400; }
+    .si-name { display:block; font-size: 12px; color: #d4d4d4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
     .si-meta { display:block; font-size: 10px; color: #505050; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
     .si.active .si-name { color: #b5bd68; }
-    .si.active .si-time { color: #7a8a5a; }
     .si-run { color: #b5bd68; }
+    .si-attention { margin-left: 6px; font-size: 11px; animation: bellPulse 2s ease-in-out infinite; }
+    @keyframes bellPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
     .si { position: relative; }
     .si-rename,
     .si-del { position:absolute; top:50%; transform:translateY(-50%); background:transparent; border:none; color:#666; font-size:11px; min-width:28px; height:28px; border-radius:6px; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0 8px; transition: color .12s, background-color .12s, opacity .12s; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
@@ -642,7 +641,7 @@
     .si-new { border: 1px dashed rgba(128, 128, 128, 0.22); }
     .si-new .si-name { color: #8abeb7; }
     .si-new:hover { border-color: #8abeb7; background: #1a2a2a; }
-    .si-wt { padding-right: 116px; }
+    .si-wt { padding-right: 112px; }
     .sidebar-section-hdr {
       font-size: 10px;
       text-transform: uppercase;
@@ -1568,6 +1567,7 @@
     body.light .si.active .si-name { color: #2a7a3a; }
     body.light .si-meta { color: #888; }
     body.light .si-run { color: #2a7a3a; }
+    body.light .si-attention { animation: bellPulse 2s ease-in-out infinite; }
     body.light .sidebar-section-hdr { color: #888; border-top-color: #d0d0ca; }
     body.light .sidebar-group-hdr { color: #2a7a6a; }
     body.light .scroll-bottom-btn { background: #f0f0ea; border-color: #d0d0ca; color: #666; box-shadow: 0 2px 8px rgba(0,0,0,.1); }
