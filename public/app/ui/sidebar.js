@@ -211,19 +211,15 @@ export function createSidebar({
 			? `\ud83c\udf3f ${wtName || sessionLabel}`
 			: String(sessionLabel).replace(/\s+/g, " ").trim().slice(0, 60);
 
+		const rel = formatRelativeTime(s.modified);
+		const runningIndicator = s.isRunning ? ` <span class="si-run">\u2022 running</span>` : "";
+
 		const name = document.createElement("div");
 		name.className = "si-name";
-		name.textContent = label;
+		name.innerHTML = `${label}<span class="si-time">${rel}${runningIndicator}</span>`;
 		name.title = isWt ? `${wtName} — ${String(sessionLabel).slice(0, 60)}` : label;
 
-		const meta = document.createElement("div");
-		meta.className = "si-meta";
-		const rel = formatRelativeTime(s.modified);
-		const dir = shortPath(s.cwd);
-		meta.innerHTML = `${rel}${dir ? ` \u00b7 ${dir}` : ""}${s.isRunning ? ` \u00b7 <span class="si-run">running</span>` : ""}`;
-
 		row.appendChild(name);
-		row.appendChild(meta);
 
 		// Worktree-specific: merge button
 		if (isWt) {

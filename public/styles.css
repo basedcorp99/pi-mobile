@@ -616,15 +616,18 @@
     .new-session-empty { padding: 8px 0; }
     .si {
       display: flex; flex-direction: column;
-      padding: 5px 80px 5px 8px; border-radius: 6px; cursor: pointer;
+      padding: 7px 80px 7px 8px; border-radius: 6px; cursor: pointer;
       border: 1px solid transparent; transition: all .1s;
       min-width: 0;
     }
     .si:hover { background: #1e1e28; }
     .si.active { background: #1e2a20; border-color: #2a3a2a; }
-    .si-name { display:block; font-size: 12px; color: #d4d4d4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+    .si-name { display:flex; align-items:center; justify-content:space-between; font-size: 12px; color: #d4d4d4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; gap:8px; }
+    .si-name > span { flex-shrink:0; }
+    .si-time { font-size: 10px; color: #606060; font-weight: 400; }
     .si-meta { display:block; font-size: 10px; color: #505050; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
     .si.active .si-name { color: #b5bd68; }
+    .si.active .si-time { color: #7a8a5a; }
     .si-run { color: #b5bd68; }
     .si { position: relative; }
     .si-rename,
@@ -639,7 +642,7 @@
     .si-new { border: 1px dashed rgba(128, 128, 128, 0.22); }
     .si-new .si-name { color: #8abeb7; }
     .si-new:hover { border-color: #8abeb7; background: #1a2a2a; }
-    .si-wt { padding-right: 112px; }
+    .si-wt { padding-right: 116px; }
     .sidebar-section-hdr {
       font-size: 10px;
       text-transform: uppercase;
