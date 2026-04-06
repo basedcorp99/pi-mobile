@@ -65,6 +65,7 @@ export interface ApiCreateSessionRequest {
 	clientId?: string;
 	cwd?: string;
 	resumeSessionPath?: string;
+	forceNew?: boolean;
 }
 
 export interface ApiCreateSessionResponse {

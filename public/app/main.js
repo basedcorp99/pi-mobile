@@ -131,6 +131,7 @@ let promptHistoryCursor = -1;
 let promptHistoryDraft = "";
 let promptHistorySessionId = null;
 let lastComposerSessionId = null;
+const sessionDrafts = new Map(); // sessionId → draft text
 
 function syncSessionUrl(sessionId) {
 	if (replayName) return;
@@ -261,7 +262,18 @@ function getSessionPromptHistory(sessionId = sessionCtrl?.getActiveSessionId?.()
 function syncPromptHistoryState() {
 	const sessionId = sessionCtrl?.getActiveSessionId?.() || null;
 	if (sessionId !== lastComposerSessionId) {
+		// Save draft for the session we're leaving
+		if (lastComposerSessionId && input) {
+			const draft = input.value;
+			if (draft.trim()) sessionDrafts.set(lastComposerSessionId, draft);
+			else sessionDrafts.delete(lastComposerSessionId);
+		}
 		lastComposerSessionId = sessionId;
+		// Restore draft for the session we're entering
+		if (input) {
+			input.value = sessionDrafts.get(sessionId) || "";
+			autoResize(input);
+		}
 		resetPromptHistoryNavigation();
 	}
 	if (sessionId) reconcilePendingPromptHistory(sessionId);
@@ -676,6 +688,7 @@ async function sendPromptFromInput() {
 	resetPromptHistoryNavigation();
 	input.value = "";
 	autoResize(input);
+	if (sessionId) sessionDrafts.delete(sessionId);
 	clearAttachments();
 	const activeState = sessionCtrl.getActiveState?.();
 	const deliverAs = activeState?.isStreaming ? getStreamingSendMode() : undefined;

@@ -859,14 +859,16 @@ export class PiWebRuntime {
 		const cwd = request.cwd ?? process.cwd();
 		await ensureDirectory(cwd);
 
-		// If there's already a running session in this cwd, reuse it
-		for (const [existingId, existing] of this.runningById.entries()) {
-			if (existing.cwd === cwd) {
-				if (existing.controllerClientId === null) {
-					existing.controllerClientId = clientId;
-					this.broadcast(existingId, { type: "controller_changed", controllerClientId: clientId });
+		// If there's already a running session in this cwd and forceNew is not set, reuse it
+		if (!request.forceNew) {
+			for (const [existingId, existing] of this.runningById.entries()) {
+				if (existing.cwd === cwd) {
+					if (existing.controllerClientId === null) {
+						existing.controllerClientId = clientId;
+						this.broadcast(existingId, { type: "controller_changed", controllerClientId: clientId });
+					}
+					return { sessionId: existingId };
 				}
-				return { sessionId: existingId };
 			}
 		}
 

@@ -326,13 +326,38 @@ export function createSidebar({
 			return;
 		}
 
-		for (const s of normalSessions) {
-			sessionsList.appendChild(renderSessionRow(s));
+		// Group normal sessions by cwd
+		if (normalSessions.length > 0) {
+			const byDir = new Map();
+			for (const s of normalSessions) {
+				const dir = s.cwd || "unknown";
+				if (!byDir.has(dir)) byDir.set(dir, []);
+				byDir.get(dir).push(s);
+			}
+
+			if (byDir.size === 1) {
+				// Single directory — show sessions directly with a subtle folder badge
+				const [dir, sessions] = [...byDir][0];
+				const hdr = document.createElement("div");
+				hdr.className = "sidebar-group-hdr";
+				hdr.textContent = shortPath(dir);
+				sessionsList.appendChild(hdr);
+				for (const s of sessions) sessionsList.appendChild(renderSessionRow(s));
+			} else {
+				for (const [dir, sessions] of byDir) {
+					const hdr = document.createElement("div");
+					hdr.className = "sidebar-group-hdr";
+					hdr.textContent = shortPath(dir);
+					sessionsList.appendChild(hdr);
+					for (const s of sessions) sessionsList.appendChild(renderSessionRow(s));
+				}
+			}
 		}
 
+		// Group worktree sessions by repo
 		if (worktreeSessions.length > 0) {
 			const sectionHdr = document.createElement("div");
-			sectionHdr.className = "sidebar-wt-section-hdr";
+			sectionHdr.className = "sidebar-section-hdr";
 			sectionHdr.textContent = "Worktrees";
 			sessionsList.appendChild(sectionHdr);
 
@@ -345,13 +370,11 @@ export function createSidebar({
 			}
 
 			for (const [repoRoot, sessions] of byRepo) {
-				const repoHdr = document.createElement("div");
-				repoHdr.className = "sidebar-wt-repo-hdr";
-				repoHdr.textContent = repoRoot.split("/").pop() || repoRoot;
-				sessionsList.appendChild(repoHdr);
-				for (const s of sessions) {
-					sessionsList.appendChild(renderSessionRow(s));
-				}
+				const hdr = document.createElement("div");
+				hdr.className = "sidebar-group-hdr";
+				hdr.textContent = shortPath(repoRoot);
+				sessionsList.appendChild(hdr);
+				for (const s of sessions) sessionsList.appendChild(renderSessionRow(s));
 			}
 		}
 	}
@@ -575,7 +598,7 @@ export function createSidebar({
 
 	async function startNormalSession(cwd) {
 		try {
-			const result = await api.postJson("/api/sessions", { clientId, cwd: cwd.trim() });
+			const result = await api.postJson("/api/sessions", { clientId, cwd: cwd.trim(), forceNew: true });
 			viewMode = "sessions";
 			onSessionIdSelected(result.sessionId);
 			setOpen(false);
