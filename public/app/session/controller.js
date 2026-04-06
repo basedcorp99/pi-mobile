@@ -104,7 +104,7 @@ export function createSessionController({
 
 	function connectEvents(sessionId) {
 		closeEvents();
-		connectGraceUntil = Date.now() + 3000;
+		connectGraceUntil = Date.now() + 8000;
 
 		const qs = new URLSearchParams({ clientId });
 		if (token) qs.set("token", token);
@@ -252,11 +252,13 @@ export function createSessionController({
 			lastCliCommand = computeCliCommand(activeState) || lastCliCommand;
 
 			if (isReconnectInit) {
+				// Reconnect: preserve notices, just sync messages
 				if (activeState?.isStreaming || pendingPrompt) chatView.syncFromMessages(activeState.messages || []);
 				else chatView.replaceFromMessages(activeState.messages || []);
 			} else {
+				// Fresh session load: discard notices (new data is here)
 				onCloseMenu();
-				chatView.clear();
+				chatView.clear({ discardNotices: true });
 				chatView.renderHistory(activeState.messages || []);
 			}
 			onStateChange();
@@ -476,17 +478,17 @@ export function createSessionController({
 			onStateChange();
 			return;
 		}
+		// Show loading immediately before any async work
+		chatView.showLoading("Loading session…");
 		if (session.isRunning) {
 			try {
-				await api.getJson(`/api/sessions/${encodeURIComponent(session.id)}/state`);
 				activeSessionId = session.id;
+				// Connect events and fetch state in parallel with takeover
 				connectEvents(activeSessionId);
-				// Auto-takeover so we can actually send commands
-				try {
-					await api.postJson(`/api/sessions/${encodeURIComponent(session.id)}/takeover`, { clientId });
-				} catch {
-					// might fail if streaming, will retry on first prompt
-				}
+				await Promise.all([
+					api.getJson(`/api/sessions/${encodeURIComponent(session.id)}/state`),
+					api.postJson(`/api/sessions/${encodeURIComponent(session.id)}/takeover`, { clientId }).catch(() => {}),
+				]);
 				onSidebarClose();
 				onStateChange();
 				return;

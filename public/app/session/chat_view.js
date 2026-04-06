@@ -200,7 +200,11 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 		});
 	}
 
-	function clear() {
+	function clear(options = {}) {
+		// Save pinned notices unless explicitly discarding them
+		const savedNotices = options.discardNotices
+			? []
+			: Array.from(msgsEl.querySelectorAll(".notice-block")).map((n) => n.cloneNode(true));
 		msgsEl.innerHTML = "";
 		const spacer = document.createElement("div");
 		spacer.className = "msgs-spacer";
@@ -215,6 +219,16 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 		subagentCards = new Map();
 		reviewCards = new Map();
 		autoStickToBottom = true;
+		// Re-append saved notices at top
+		for (const n of savedNotices) msgsEl.appendChild(n);
+	}
+
+	function showLoading(text = "Loading…") {
+		clear({ discardNotices: true });
+		const block = document.createElement("div");
+		block.className = "assistant-block loading-placeholder";
+		block.innerHTML = `<div class="thinking-text" style="display:flex;align-items:center;gap:8px"><span class="work-spin" style="animation:spin 1s linear infinite">⠋</span> ${text}</div>`;
+		msgsEl.appendChild(block);
 	}
 
 	function appendAssistantBlock() {
@@ -332,7 +346,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 	function appendNotice(text, kind = "info") {
 		const stick = shouldAutoStick();
 		const block = document.createElement("div");
-		block.className = "assistant-block";
+		block.className = "assistant-block notice-block";
 		const el = document.createElement("div");
 		el.className = `notice-text ${kind}`;
 		el.textContent = text;
@@ -681,6 +695,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 
 	return {
 		clear,
+		showLoading,
 		scrollToBottom,
 		appendNotice,
 		renderHistory,
