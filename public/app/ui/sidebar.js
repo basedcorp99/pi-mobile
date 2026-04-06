@@ -352,22 +352,14 @@ export function createSidebar({
 				byDir.get(dir).push(s);
 			}
 
-			if (byDir.size === 1) {
-				// Single directory — show sessions directly with a subtle folder badge
-				const [dir, sessions] = [...byDir][0];
+			const sortedDirs = [...byDir.keys()].sort((a, b) => shortPath(a).localeCompare(shortPath(b)));
+			for (const dir of sortedDirs) {
+				const sessions = byDir.get(dir);
 				const hdr = document.createElement("div");
 				hdr.className = "sidebar-group-hdr";
 				hdr.textContent = shortPath(dir);
 				sessionsList.appendChild(hdr);
 				for (const s of sessions) sessionsList.appendChild(renderSessionRow(s));
-			} else {
-				for (const [dir, sessions] of byDir) {
-					const hdr = document.createElement("div");
-					hdr.className = "sidebar-group-hdr";
-					hdr.textContent = shortPath(dir);
-					sessionsList.appendChild(hdr);
-					for (const s of sessions) sessionsList.appendChild(renderSessionRow(s));
-				}
 			}
 		}
 
@@ -386,7 +378,9 @@ export function createSidebar({
 				byRepo.get(repoRoot).push(s);
 			}
 
-			for (const [repoRoot, sessions] of byRepo) {
+			const sortedRepos = [...byRepo.keys()].sort((a, b) => shortPath(a).localeCompare(shortPath(b)));
+			for (const repoRoot of sortedRepos) {
+				const sessions = byRepo.get(repoRoot);
 				const hdr = document.createElement("div");
 				hdr.className = "sidebar-group-hdr";
 				hdr.textContent = shortPath(repoRoot);
