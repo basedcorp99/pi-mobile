@@ -645,7 +645,7 @@ export class PiWebRuntime {
 	}
 
 	private authStorage = AuthStorage.create();
-	private modelRegistry = new ModelRegistry(this.authStorage);
+	private modelRegistry = ModelRegistry.create(this.authStorage);
 	private repoStorePath = join(homedir(), ".pi", "agent", "pi-web", "repos.json");
 
 	private async loadReposFromDisk(): Promise<string[]> {
