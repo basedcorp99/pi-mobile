@@ -22,6 +22,23 @@ function isWorktreePath(cwd) {
 	return typeof cwd === "string" && /\/.worktrees\/worktree-/.test(cwd);
 }
 
+function fuzzyMatchSession(query, hay) {
+	if (!query) return true;
+	const q = query.toLowerCase();
+	const h = hay.toLowerCase();
+	// Exact substring match
+	if (h.includes(q)) return true;
+	// Token match: all query tokens must appear somewhere
+	const tokens = q.split(/\s+/).filter(Boolean);
+	if (tokens.length > 1 && tokens.every((t) => h.includes(t))) return true;
+	// Fuzzy char match: all query chars appear in order
+	let qi = 0;
+	for (let i = 0; i < h.length && qi < q.length; i++) {
+		if (h[i] === q[qi]) qi++;
+	}
+	return qi === q.length;
+}
+
 function shouldShowSession(s) {
 	if (!s || typeof s !== "object") return false;
 	if (s.isRunning) return true;
@@ -277,8 +294,8 @@ export function createSidebar({
 		const query = sessionSearchQuery.trim().toLowerCase();
 		const allFiltered = query
 			? lastFetchedSessions.filter((s) => {
-				const hay = [s?.name || "", s?.firstMessage || "", s?.cwd || "", s?.id || ""].join(" ").toLowerCase();
-				return hay.includes(query);
+				const hay = [s?.name || "", s?.firstMessage || "", s?.cwd || "", s?.id || ""].join(" ");
+				return fuzzyMatchSession(query, hay);
 			})
 			: lastFetchedSessions.slice();
 
