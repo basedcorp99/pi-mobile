@@ -205,17 +205,10 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 		const savedNotices = options.discardNotices
 			? []
 			: Array.from(msgsEl.querySelectorAll(".notice-block")).map((n) => n.cloneNode(true));
-		// Subtle fade transition on session switch
-		msgsEl.classList.add("switching");
-		msgsEl.classList.remove("switching-in");
 		msgsEl.innerHTML = "";
 		const spacer = document.createElement("div");
 		spacer.className = "msgs-spacer";
 		msgsEl.appendChild(spacer);
-		requestAnimationFrame(() => {
-			msgsEl.classList.add("switching-in");
-			msgsEl.classList.remove("switching");
-		});
 		currentAssistant = null;
 		tools.clear();
 		appendedUserMessageKeys = new Set();
@@ -296,6 +289,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 		const el = document.createElement("div");
 		el.className = "user-msg";
 		renderUserMessageContent(el, content);
+
 		const rawText = extractTextContent(content);
 		if (rawText.trim()) {
 			const actions = createMessageActions([
@@ -392,9 +386,9 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 				if (!block.rawThinking || parsed.thinking.length >= block.rawThinking.length) {
 					block.rawThinking = parsed.thinking;
 				}
-				block.thinkingWrap.style.display = "";
-				block.thinking.classList.add("shown");
-				block.thinking.textContent = block.rawThinking;
+				if (block.thinkingWrap) block.thinkingWrap.style.display = "";
+				if (block.thinking) block.thinking.classList.add("shown");
+				if (block.thinking) block.thinking.textContent = block.rawThinking;
 			}
 			if (parsed.text && (!block.rawText || parsed.text.length >= block.rawText.length)) {
 				block.rawText = parsed.text;
@@ -628,9 +622,9 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 			const block = ensureAssistantBlock();
 			if ((update.type === "thinking_delta" || update.type === "reasoning_delta") && typeof update.delta === "string") {
 				block.rawThinking += update.delta;
-				block.thinkingWrap.style.display = "";
-				block.thinking.classList.add("shown");
-				block.thinking.textContent = block.rawThinking;
+				if (block.thinkingWrap) block.thinkingWrap.style.display = "";
+				if (block.thinking) block.thinking.classList.add("shown");
+				if (block.thinking) block.thinking.textContent = block.rawThinking;
 			} else if (update.type === "text_delta" && typeof update.delta === "string") {
 				block.rawText += update.delta;
 				renderMarkdownThrottled(block.text, block.rawText);

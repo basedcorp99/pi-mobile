@@ -130,7 +130,12 @@ export function createMenu({
 
 	function position(_anchor) {
 		if (!menuPanel) return;
-		// Always center as a modal — consistent across phone/tablet/desktop
+		const isMobile = window.matchMedia("(hover: none) and (pointer: coarse) and (max-width: 740px)").matches;
+		if (isMobile) {
+			// CSS bottom sheet handles layout
+			return;
+		}
+		// Desktop/tablet: centered modal
 		menuPanel.style.left = "50%";
 		menuPanel.style.top = "50%";
 		menuPanel.style.transform = "translate(-50%, -50%)";
