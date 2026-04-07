@@ -343,7 +343,7 @@ export function createMenu({
 			body.appendChild(list);
 			panel.appendChild(hdr);
 			panel.appendChild(body);
-		});
+		}, "thinking");
 	}
 
 	function openCommandsMenu() {

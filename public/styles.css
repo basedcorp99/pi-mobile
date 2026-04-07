@@ -1741,8 +1741,8 @@
     }
 
     @media (hover: none) and (pointer: coarse) and (max-width: 740px) {
-      /* Bottom sheet menus on phone */
-      .menu-overlay:not([data-kind="model"]) .menu-panel {
+      /* Bottom sheet menus on phone (not model/thinking which are centered modals) */
+      .menu-overlay:not([data-kind="model"]):not([data-kind="thinking"]) .menu-panel {
         position: fixed !important;
         left: 0 !important;
         right: 0 !important;
@@ -1762,7 +1762,7 @@
         from { transform: translateY(100%); }
         to { transform: translateY(0); }
       }
-      .menu-overlay:not([data-kind="model"]) .menu-panel::before {
+      .menu-overlay:not([data-kind="model"]):not([data-kind="thinking"]) .menu-panel::before {
         content: "";
         display: block;
         width: 36px;
@@ -1771,8 +1771,9 @@
         background: var(--border-strong);
         margin: 8px auto 4px;
       }
-      /* Model dialog: centered modal (not bottom sheet) so keyboard doesn't hide the list */
-      .menu-overlay[data-kind="model"] .menu-panel {
+      /* Model and Thinking dialogs: centered modal (not bottom sheet) so keyboard doesn't hide the list */
+      .menu-overlay[data-kind="model"] .menu-panel,
+      .menu-overlay[data-kind="thinking"] .menu-panel {
         position: fixed !important;
         left: 50% !important;
         top: 10% !important;
