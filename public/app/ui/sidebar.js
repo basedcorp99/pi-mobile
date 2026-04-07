@@ -256,11 +256,12 @@ export function createSidebar({
 		return row;
 	}
 
+	let activeSheetDismiss = null;
 	function showSessionActions(s, row) {
 		const isWt = isWorktreePath(s.cwd);
 		const wtName = isWt ? extractWorktreeName(s.cwd) : null;
-		const existing = sessionsList.querySelector(".si-actions-sheet");
-		if (existing) existing.remove();
+		// Dismiss any existing sheet first
+		if (activeSheetDismiss) { activeSheetDismiss(); activeSheetDismiss = null; }
 
 		const sheet = document.createElement("div");
 		sheet.className = "si-actions-sheet";
@@ -287,8 +288,14 @@ export function createSidebar({
 			void deleteSessionRow(s, null, row);
 		}, true));
 		row.after(sheet);
-		const dismiss = (e) => { if (!sheet.contains(e.target)) { sheet.remove(); document.removeEventListener("pointerdown", dismiss); } };
-		setTimeout(() => document.addEventListener("pointerdown", dismiss), 10);
+		const dismiss = () => {
+			sheet.remove();
+			document.removeEventListener("pointerdown", onOutside);
+			if (activeSheetDismiss === dismiss) activeSheetDismiss = null;
+		};
+		const onOutside = (e) => { if (!sheet.contains(e.target)) dismiss(); };
+		activeSheetDismiss = dismiss;
+		setTimeout(() => document.addEventListener("pointerdown", onOutside), 10);
 	}
 
 	function renderSessionList(sessions) {
@@ -923,16 +930,9 @@ export function createSidebar({
 		}
 	}
 
-	// Header buttons
-	if (btnSidebarLeft) {
-		btnSidebarLeft.innerHTML = `<span class="txt">Sessions</span>`;
-		btnSidebarLeft.onclick = () => void refresh();
-	}
-	if (btnSidebarRight) {
-		btnSidebarRight.innerHTML = `<span class="txt">＋</span>`;
-		btnSidebarRight.onclick = () => void showNewSessionPicker();
-		btnSidebarRight.title = "New session";
-	}
+	// Hide header buttons — replaced by inline +Session/+Project row
+	if (btnSidebarLeft) btnSidebarLeft.style.display = "none";
+	if (btnSidebarRight) btnSidebarRight.style.display = "none";
 
 	// Poll for session state changes (streaming → done) every 5s
 	attentionPollTimer = setInterval(() => {
