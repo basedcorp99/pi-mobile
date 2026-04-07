@@ -665,6 +665,11 @@ function updateControls() {
 }
 
 function autoResize(el) {
+	if (!el.value) {
+		// Let CSS min-height handle empty state so placeholder isn't clipped
+		el.style.height = "";
+		return;
+	}
 	el.style.height = "auto";
 	el.style.height = Math.min(el.scrollHeight, 200) + "px";
 }
@@ -1205,13 +1210,6 @@ if (kbEnter) kbEnter.addEventListener("click", () => sendPromptFromInput());
 			const open = actionsTray.hidden;
 			actionsTray.hidden = !open;
 			plusBtn.classList.toggle("open", open);
-		});
-		// Close tray when any action inside is clicked
-		actionsTray.addEventListener("click", (e) => {
-			if (e.target.closest(".composer-action-item")) {
-				actionsTray.hidden = true;
-				plusBtn.classList.remove("open");
-			}
 		});
 	}
 }
