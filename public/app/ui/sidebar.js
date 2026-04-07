@@ -260,8 +260,6 @@ export function createSidebar({
 	function showSessionActions(s, row) {
 		const isWt = isWorktreePath(s.cwd);
 		const wtName = isWt ? extractWorktreeName(s.cwd) : null;
-		// Dismiss any existing sheet first
-		if (activeSheetDismiss) { activeSheetDismiss(); activeSheetDismiss = null; }
 
 		const sheet = document.createElement("div");
 		sheet.className = "si-actions-sheet";
@@ -288,6 +286,8 @@ export function createSidebar({
 			void deleteSessionRow(s, null, row);
 		}, true));
 		row.after(sheet);
+		// Dismiss previous sheet now that the new one is in the DOM
+		if (activeSheetDismiss) { activeSheetDismiss(); activeSheetDismiss = null; }
 		const dismiss = () => {
 			sheet.remove();
 			document.removeEventListener("pointerdown", onOutside);
