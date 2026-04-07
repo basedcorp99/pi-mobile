@@ -1343,7 +1343,7 @@ export class PiWebRuntime {
 		}
 
 		const target = request.targetBranch?.trim() || await this.getCurrentBranch(repoRoot);
-		const { exitCode, stdout: mergeOut } = await this.gitExec(repoRoot, ["merge", wtBranch, "--no-ff", "-m", `Merge worktree ${wtBranch} into ${target}`]);
+		const { exitCode, stdout: mergeOut } = await this.gitExec(repoRoot, ["merge", wtBranch, "-m", `Merge worktree ${wtBranch} into ${target}`]);
 		if (exitCode !== 0) {
 			return { merged: false, message: `Merge conflict or failure. Resolve manually in ${repoRoot}.` };
 		}

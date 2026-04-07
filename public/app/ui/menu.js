@@ -120,6 +120,9 @@ export function createMenu({
 		delete menuOverlay.dataset.kind;
 		menuPanel.innerHTML = "";
 		menuPanel.style.transform = "";
+		menuPanel.style.left = "";
+		menuPanel.style.top = "";
+		menuPanel.style.right = "";
 		menuPanel.style.width = "";
 		menuPanel.style.maxWidth = "";
 		menuPanel.style.maxHeight = "";
@@ -127,6 +130,18 @@ export function createMenu({
 
 	function position(anchor) {
 		if (!menuPanel) return;
+
+		// On touch devices / narrow screens — center the panel as a modal
+		const isMobile = window.matchMedia("(hover: none) and (pointer: coarse)").matches || window.innerWidth <= 740;
+		if (isMobile) {
+			menuPanel.style.left = "50%";
+			menuPanel.style.top = "50%";
+			menuPanel.style.transform = "translate(-50%, -50%)";
+			menuPanel.style.width = "min(480px, 92vw)";
+			menuPanel.style.maxHeight = "min(70vh, 520px)";
+			return;
+		}
+
 		const rect = anchor.getBoundingClientRect();
 		const margin = 8;
 

@@ -12,11 +12,12 @@ export function createUiPromptDialog({ menuOverlay, menuScrim, menuPanel }) {
 		activeCallback = onSubmit;
 		menuOverlay.classList.add("open");
 		menuPanel.innerHTML = "";
-		menuPanel.style.left = "8px";
-		menuPanel.style.top = "60px";
-		menuPanel.style.right = "8px";
-		menuPanel.style.width = "auto";
+		menuPanel.style.left = "50%";
+		menuPanel.style.top = "50%";
+		menuPanel.style.right = "auto";
+		menuPanel.style.width = "min(520px, 92vw)";
 		menuPanel.style.maxWidth = "min(520px, 92vw)";
+		menuPanel.style.transform = "translate(-50%, -50%)";
 
 		const hdr = document.createElement("div");
 		hdr.className = "menu-hdr";
@@ -71,11 +72,12 @@ export function createUiPromptDialog({ menuOverlay, menuScrim, menuPanel }) {
 		activeCallback = onSubmit;
 		menuOverlay.classList.add("open");
 		menuPanel.innerHTML = "";
-		menuPanel.style.left = "8px";
-		menuPanel.style.top = "60px";
-		menuPanel.style.right = "8px";
-		menuPanel.style.width = "auto";
+		menuPanel.style.left = "50%";
+		menuPanel.style.top = "50%";
+		menuPanel.style.right = "auto";
+		menuPanel.style.width = "min(520px, 92vw)";
 		menuPanel.style.maxWidth = "min(520px, 92vw)";
+		menuPanel.style.transform = "translate(-50%, -50%)";
 
 		const hdr = document.createElement("div");
 		hdr.className = "menu-hdr";
@@ -123,11 +125,12 @@ export function createUiPromptDialog({ menuOverlay, menuScrim, menuPanel }) {
 		activeCallback = onSubmit;
 		menuOverlay.classList.add("open");
 		menuPanel.innerHTML = "";
-		menuPanel.style.left = "8px";
-		menuPanel.style.top = "60px";
-		menuPanel.style.right = "8px";
-		menuPanel.style.width = "auto";
+		menuPanel.style.left = "50%";
+		menuPanel.style.top = "50%";
+		menuPanel.style.right = "auto";
+		menuPanel.style.width = "min(520px, 92vw)";
 		menuPanel.style.maxWidth = "min(520px, 92vw)";
+		menuPanel.style.transform = "translate(-50%, -50%)";
 
 		const hdr = document.createElement("div");
 		hdr.className = "menu-hdr";

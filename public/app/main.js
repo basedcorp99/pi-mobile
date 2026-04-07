@@ -1196,6 +1196,26 @@ if (kbRelease) kbRelease.addEventListener("click", () => {
 });
 if (kbEnter) kbEnter.addEventListener("click", () => sendPromptFromInput());
 
+// Composer "+" button — toggle action tray
+{
+	const plusBtn = document.getElementById("btn-composer-plus");
+	const actionsTray = document.getElementById("composer-actions");
+	if (plusBtn && actionsTray) {
+		plusBtn.addEventListener("click", () => {
+			const open = actionsTray.hidden;
+			actionsTray.hidden = !open;
+			plusBtn.classList.toggle("open", open);
+		});
+		// Close tray when any action inside is clicked
+		actionsTray.addEventListener("click", (e) => {
+			if (e.target.closest(".composer-action-item")) {
+				actionsTray.hidden = true;
+				plusBtn.classList.remove("open");
+			}
+		});
+	}
+}
+
 if (sidebarOverlay) sidebarOverlay.addEventListener("click", () => sidebarCtrl.setOpen(false));
 
 // Scroll-to-bottom floating button
