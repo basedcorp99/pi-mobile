@@ -905,6 +905,15 @@
       -webkit-overflow-scrolling: touch;
     }
     .msgs-spacer { flex: 1; }
+    .msgs.switching {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    .msgs.switching-in {
+      transition: opacity .2s ease, transform .2s ease;
+      opacity: 1;
+      transform: translateY(0);
+    }
     .scroll-bottom-btn {
       position: absolute;
       right: 18px;
@@ -929,18 +938,61 @@
     }
     .scroll-bottom-btn[hidden] { display: none !important; }
     .scroll-bottom-btn:hover { color: var(--text-primary); border-color: var(--accent); opacity: 1; }
+    .scroll-badge {
+      position: absolute;
+      top: -6px;
+      right: -6px;
+      min-width: 18px;
+      height: 18px;
+      padding: 0 5px;
+      border-radius: var(--radius-pill);
+      background: var(--accent);
+      color: var(--bg);
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 18px;
+      text-align: center;
+    }
+    .scroll-badge[hidden] { display: none; }
+
+    /* ── Empty state ──────────────────────────────────── */
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 40px 20px;
+      gap: 8px;
+      opacity: 0.7;
+    }
+    .empty-logo {
+      font-size: 56px;
+      font-weight: 700;
+      color: var(--accent);
+      line-height: 1;
+      margin-bottom: 8px;
+    }
+    .empty-title {
+      font-size: 17px;
+      font-weight: 600;
+      color: var(--text-primary);
+      letter-spacing: -0.02em;
+    }
+    .empty-hint {
+      font-size: 14px;
+      color: var(--text-secondary);
+    }
 
     /* every block owns its top gap */
     .user-msg, .tool-box, .bash-block, .assistant-block { margin-top: 1em; }
 
-    /* ── User message ── right-aligned iOS bubble ──────────── */
+    /* ── User message ── full-width tinted band ────────── */
     .user-msg {
-      background: rgba(126, 200, 192, 0.1);
-      border: 1px solid rgba(126, 200, 192, 0.08);
+      background: rgba(126, 200, 192, 0.06);
+      border-top: 1px solid rgba(126, 200, 192, 0.06);
+      border-bottom: 1px solid rgba(126, 200, 192, 0.06);
       padding: 12px 16px;
-      margin-left: 40px;
-      margin-right: 12px;
-      border-radius: var(--radius-lg) var(--radius-lg) 4px var(--radius-lg);
       white-space: pre-wrap;
       word-break: break-word;
     }
@@ -989,7 +1041,6 @@
     /* ── Assistant text / thinking ─────────────────────────── */
     .assistant-block {
       padding: 0 16px;
-      margin-right: 40px;
     }
 
     .thinking-text {
@@ -1684,7 +1735,7 @@
     }
     body.light .app-header { background: var(--surface-glass); border-bottom-color: var(--border); }
     body.light .app-logo { color: var(--text-primary); }
-    body.light .user-msg { background: rgba(45, 138, 126, 0.06); border-color: rgba(45, 138, 126, 0.08); }
+    body.light .user-msg { background: rgba(45, 138, 126, 0.04); border-color: rgba(45, 138, 126, 0.05); }
     body.light .tool-box.pending { background: rgba(0, 0, 0, 0.02); border-color: var(--border); }
     body.light .tool-box.success { background: rgba(46, 125, 50, 0.05); border-color: rgba(46, 125, 50, 0.1); }
     body.light .tool-box.error { background: rgba(211, 47, 47, 0.05); border-color: rgba(211, 47, 47, 0.1); }

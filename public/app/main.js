@@ -31,6 +31,8 @@ import { createAgentLauncher } from "./ui/agent_launcher.js";
 import { createReviewLauncher } from "./ui/review_launcher.js";
 import { createSidebar } from "./ui/sidebar.js";
 
+function haptic(ms = 10) { try { navigator.vibrate?.(ms); } catch {} }
+
 const sessionsList = document.getElementById("sessions-list");
 const msgs = document.getElementById("msgs");
 const input = document.getElementById("inp");
@@ -647,17 +649,11 @@ function updateControls() {
 	if (!hasSession) {
 		input.placeholder = "";
 	} else if (isController) {
-		input.placeholder = phone
-			? sendOnEnter
-				? "Type a prompt (Enter key to send, Return key for newline)"
-				: "Type a prompt (Enter for newline, use Send to send)"
-			: streaming
-				? "Streaming… (Esc to abort, Enter to queue follow-up)"
-				: sendOnEnter
-					? "Type a prompt (Enter to send, Shift+Enter for newline)"
-					: "Type a prompt (Enter for newline, Ctrl+Enter to send)";
+		input.placeholder = streaming
+			? "Streaming…"
+			: "Message…";
 	} else {
-		input.placeholder = streaming ? "Viewer mode — Esc to abort" : "Viewer mode — Take over to type";
+		input.placeholder = streaming ? "Streaming…" : "Viewer — take over to type";
 	}
 
 	updateTopSelectors();
@@ -690,6 +686,7 @@ async function sendPromptFromInput() {
 	const text = input.value;
 	const images = pendingAttachments.map((attachment) => attachment.content);
 	if (!text.trim() && images.length === 0) return false;
+	haptic();
 	const snapshot = pendingAttachments.slice();
 	const sessionId = sessionCtrl.getActiveSessionId();
 	if (sessionId && text.trim()) rememberPromptHistory(sessionId, text);
@@ -1021,7 +1018,7 @@ document.addEventListener("visibilitychange", () => {
 	}
 });
 
-btnAbort.addEventListener("click", () => void sessionCtrl.abortRun());
+btnAbort.addEventListener("click", () => { haptic(15); void sessionCtrl.abortRun(); });
 if (btnCompact) btnCompact.addEventListener("click", () => {
 	void sessionCtrl.compact();
 });
@@ -1216,26 +1213,54 @@ if (kbEnter) kbEnter.addEventListener("click", () => sendPromptFromInput());
 
 if (sidebarOverlay) sidebarOverlay.addEventListener("click", () => sidebarCtrl.setOpen(false));
 
-// Scroll-to-bottom floating button
+// Scroll-to-bottom floating button with unread badge
 if (btnScrollBottom && msgs) {
 	let scrollBtnRaf = 0;
+	let unreadCount = 0;
+	let wasNearBottom = true;
+	// Create badge element
+	const badge = document.createElement("span");
+	badge.className = "scroll-badge";
+	badge.hidden = true;
+	btnScrollBottom.appendChild(badge);
+
+	const isNearBottom = () => {
+		const remaining = Math.max(0, msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight);
+		return remaining <= 400;
+	};
 	const updateScrollBtn = () => {
 		scrollBtnRaf = 0;
-		const remaining = Math.max(0, msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight);
 		const scrollable = msgs.scrollHeight > msgs.clientHeight + 24;
-		const nearBottom = remaining <= 400;
-		btnScrollBottom.hidden = !scrollable || nearBottom;
+		const near = isNearBottom();
+		btnScrollBottom.hidden = !scrollable || near;
+		if (near) { unreadCount = 0; badge.hidden = true; }
+		wasNearBottom = near;
 	};
 	const scheduleScrollBtnUpdate = () => {
 		if (scrollBtnRaf) return;
 		scrollBtnRaf = requestAnimationFrame(updateScrollBtn);
 	};
+	// Track new messages arriving while scrolled up
+	new MutationObserver(() => {
+		if (!isNearBottom()) {
+			const newBlocks = msgs.querySelectorAll(".user-msg, .assistant-block");
+			const total = newBlocks.length;
+			if (total > 0 && !wasNearBottom) {
+				unreadCount++;
+				badge.textContent = unreadCount > 9 ? "9+" : String(unreadCount);
+				badge.hidden = false;
+			}
+		}
+		scheduleScrollBtnUpdate();
+	}).observe(msgs, { childList: true });
 	msgs.addEventListener("scroll", scheduleScrollBtnUpdate, { passive: true });
 	new ResizeObserver(scheduleScrollBtnUpdate).observe(msgs);
-	new MutationObserver(scheduleScrollBtnUpdate).observe(msgs, { childList: true, subtree: true, characterData: true });
 	window.addEventListener("resize", scheduleScrollBtnUpdate);
 	btnScrollBottom.addEventListener("click", () => {
+		haptic();
 		msgs.scrollTop = msgs.scrollHeight;
+		unreadCount = 0;
+		badge.hidden = true;
 		scheduleScrollBtnUpdate();
 	});
 	scheduleScrollBtnUpdate();

@@ -290,6 +290,10 @@ export function createSidebar({
 		row.addEventListener("click", () => {
 			highlightSessionRow(s.id);
 			void onSelectSession(s);
+			// Auto-close sidebar on phone after picking a session
+			if (window.matchMedia("(hover: none) and (pointer: coarse) and (max-width: 1024px)").matches) {
+				setOpen(false);
+			}
 		});
 
 		return row;

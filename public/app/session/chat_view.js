@@ -205,10 +205,17 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 		const savedNotices = options.discardNotices
 			? []
 			: Array.from(msgsEl.querySelectorAll(".notice-block")).map((n) => n.cloneNode(true));
+		// Subtle fade transition on session switch
+		msgsEl.classList.add("switching");
+		msgsEl.classList.remove("switching-in");
 		msgsEl.innerHTML = "";
 		const spacer = document.createElement("div");
 		spacer.className = "msgs-spacer";
 		msgsEl.appendChild(spacer);
+		requestAnimationFrame(() => {
+			msgsEl.classList.add("switching-in");
+			msgsEl.classList.remove("switching");
+		});
 		currentAssistant = null;
 		tools.clear();
 		appendedUserMessageKeys = new Set();
