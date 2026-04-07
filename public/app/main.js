@@ -662,12 +662,17 @@ function updateControls() {
 
 function autoResize(el) {
 	if (!el.value) {
-		// Let CSS min-height handle empty state so placeholder isn't clipped
 		el.style.height = "";
 		return;
 	}
+	// Preserve msgs scroll position when editor grows/shrinks
+	const oldH = el.offsetHeight;
 	el.style.height = "auto";
 	el.style.height = Math.min(el.scrollHeight, 200) + "px";
+	const delta = el.offsetHeight - oldH;
+	if (delta !== 0 && msgs) {
+		msgs.scrollTop += delta;
+	}
 }
 
 function fillBorders() {

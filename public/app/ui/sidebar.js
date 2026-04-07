@@ -225,7 +225,15 @@ export function createSidebar({
 
 		row.appendChild(name);
 		row.appendChild(meta);
-		// No inline buttons — use long-press for actions
+
+		// Desktop: ⋯ button visible on hover
+		const moreBtn = document.createElement("button");
+		moreBtn.className = "si-more";
+		moreBtn.type = "button";
+		moreBtn.textContent = "\u22ef";
+		moreBtn.title = "Actions";
+		moreBtn.addEventListener("click", (e) => { e.stopPropagation(); showSessionActions(s, row); });
+		row.appendChild(moreBtn);
 
 		row.addEventListener("click", () => {
 			highlightSessionRow(s.id);
@@ -407,13 +415,7 @@ export function createSidebar({
 			}
 		}
 
-		// New Project button at the bottom
-		const newProjectBtn = document.createElement("div");
-		newProjectBtn.className = "si si-new";
-		newProjectBtn.style.marginTop = "16px";
-		newProjectBtn.innerHTML = `<div class="si-name">＋ New Project</div>`;
-		newProjectBtn.addEventListener("click", () => void showNewProjectDialog());
-		sessionsList.appendChild(newProjectBtn);
+
 	}
 
 	async function showNewProjectDialog() {
@@ -921,6 +923,15 @@ export function createSidebar({
 	if (btnSidebarRight) {
 		btnSidebarRight.innerHTML = `<span class="txt">＋</span>`;
 		btnSidebarRight.onclick = () => void showNewSessionPicker();
+		// Long-press or right-click for "New Project"
+		let lpRight = null;
+		btnSidebarRight.addEventListener("pointerdown", () => {
+			lpRight = setTimeout(() => { lpRight = null; void showNewProjectDialog(); }, 500);
+		});
+		btnSidebarRight.addEventListener("pointerup", () => { if (lpRight) { clearTimeout(lpRight); lpRight = null; } });
+		btnSidebarRight.addEventListener("pointercancel", () => { if (lpRight) { clearTimeout(lpRight); lpRight = null; } });
+		btnSidebarRight.addEventListener("contextmenu", (e) => { e.preventDefault(); void showNewProjectDialog(); });
+		btnSidebarRight.title = "New session (hold for new project)";
 	}
 
 	// Poll for session state changes (streaming → done) every 5s
