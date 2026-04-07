@@ -124,11 +124,14 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 
 	async function resumePending(options = {}) {
 		if (recording || transcribing) return false;
+		const jobs = await listVoiceJobs();
+		if (jobs.length === 0) return false;
+
+		transcribing = true;
+		onStateChange?.();
 		try {
-			const jobs = await listVoiceJobs();
-			if (jobs.length === 0) return false;
 			if (!options.silent) onNotice?.("Riprendo la trascrizione del messaggio vocale…", "info");
-			
+
 			// Process in parallel but preserve ordering for delivery
 			// Each job transcribes in parallel, but we deliver results in original order
 			const results = await Promise.all(
@@ -143,7 +146,7 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 					}
 				})
 			);
-			
+
 			// Deliver in original order to preserve transcript sequence
 			for (const { index, job, result, error } of results.sort((a, b) => a.index - b.index)) {
 				if (error && !options.silent) {
@@ -151,11 +154,14 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 				}
 				// Result already delivered by transcribeQueuedJobInternal on success
 			}
-			
+
 			return true;
 		} catch (error) {
 			if (!options.silent) onNotice?.(error instanceof Error ? error.message : String(error), "error");
 			return false;
+		} finally {
+			transcribing = false;
+			onStateChange?.();
 		}
 	}
 	
