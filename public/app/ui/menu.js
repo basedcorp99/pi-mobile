@@ -143,11 +143,12 @@ export function createMenu({
 		menuPanel.style.maxHeight = "min(70vh, 520px)";
 	}
 
-	function openMenu(anchor, build) {
+	function openMenu(anchor, build, kind) {
 		if (!menuOverlay || !menuPanel) return;
 		open = true;
 		menuOverlay.classList.add("open");
 		delete menuOverlay.dataset.locked;
+		if (kind) menuOverlay.dataset.kind = kind;
 		menuPanel.innerHTML = "";
 		menuPanel.style.left = "0px";
 		menuPanel.style.top = "0px";
@@ -293,7 +294,7 @@ export function createMenu({
 					list.textContent = error instanceof Error ? error.message : String(error);
 				}
 			})();
-		});
+		}, "model");
 	}
 
 	function openThinkingMenu() {
