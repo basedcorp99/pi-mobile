@@ -685,7 +685,7 @@
     .new-session-empty { padding: 8px 0; }
     .si {
       display: flex; flex-direction: column;
-      padding: 8px 80px 8px 12px; border-radius: var(--radius-md); cursor: pointer;
+      padding: 8px 12px; border-radius: var(--radius-md); cursor: pointer;
       border: 1px solid transparent; transition: all .15s ease;
       min-width: 0;
     }
@@ -697,20 +697,34 @@
     .si-run { color: var(--accent-strong); }
     .si-attention { margin-left: 6px; font-size: 11px; animation: bellPulse 2s ease-in-out infinite; }
     @keyframes bellPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-    .si { position: relative; }
-    .si-rename,
-    .si-del { position:absolute; top:50%; transform:translateY(-50%); background:transparent; border:none; color: var(--text-muted); font-size:11px; min-width:28px; height:28px; border-radius: 50%; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0 8px; transition: all .2s ease; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
-    .si-rename { right:40px; }
-    .si-del { right:6px; }
-    .si-rename:hover { color: var(--accent); background: rgba(255,255,255,.06); }
-    .si-del:hover { color: var(--danger); background: rgba(255, 85, 85, .08); }
-    .si-del:disabled { opacity:.7; cursor:progress; }
-    .si-del.si-del-sure { width:auto; max-width:72px; color: var(--danger); border-color: var(--danger); background: rgba(255, 85, 85, .1); font-weight:600; border-radius: var(--radius-pill); }
-    .si-del.si-del-busy { color: var(--warning); border-color: rgba(226, 166, 68, 0.3); background: rgba(226, 166, 68, .1); font-weight:700; border-radius: var(--radius-pill); }
+    /* Long-press action sheet */
+    .si-actions-sheet {
+      display: flex;
+      gap: 4px;
+      padding: 4px 8px 6px;
+      animation: composerTrayIn .15s ease;
+    }
+    .si-action-btn {
+      flex: 1;
+      padding: 7px 8px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--surface-light);
+      color: var(--text-secondary);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      text-align: center;
+      transition: all .15s;
+    }
+    .si-action-btn:hover { background: rgba(255,255,255,0.08); color: var(--text-primary); }
+    .si-action-btn.danger { color: var(--danger); }
+    .si-action-btn.danger:hover { background: rgba(248, 113, 113, 0.1); }
     .si-new { border: 1px dashed rgba(255,255,255,0.1); }
     .si-new .si-name { color: var(--accent); }
     .si-new:hover { border-color: var(--accent); background: rgba(126, 200, 192, 0.06); }
-    .si-wt { padding-right: 112px; }
+
     .sidebar-section-hdr {
       font-size: 11px;
       text-transform: uppercase;
@@ -1850,10 +1864,8 @@
     body.light .attach-chip { background: rgba(13, 150, 104, 0.06); border-color: rgba(13, 150, 104, 0.15); color: var(--accent-strong); }
     body.light .sidebar-overlay.open { background: rgba(0,0,0,.2); }
     body.light .si-new:hover { border-color: var(--accent); background: rgba(74, 74, 74, 0.04); }
-    body.light .si-rename:hover { color: var(--accent); background: rgba(0,0,0,.04); }
-    body.light .si-del:hover { color: var(--danger); background: rgba(211,47,47,.06); }
-    body.light .si-del.si-del-sure { color: var(--danger); border-color: var(--danger); background: rgba(211,47,47,.08); }
-    body.light .si-del.si-del-busy { color: var(--warning); border-color: rgba(230,81,0,0.3); background: rgba(230,81,0,.06); }
+    body.light .si-action-btn:hover { background: rgba(0,0,0,.06); }
+    body.light .si-action-btn.danger:hover { background: rgba(211,47,47,.06); }
     body.light .scroll-bottom-btn { background: var(--surface-glass); border-color: var(--border-strong); }
     body.light .scroll-bottom-btn:hover { border-color: var(--accent); }
     body.light .ask-option.active { background: rgba(13, 150, 104, 0.06); border-color: rgba(13, 150, 104, 0.15); }

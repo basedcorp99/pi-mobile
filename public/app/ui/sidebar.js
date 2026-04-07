@@ -202,11 +202,6 @@ export function createSidebar({
 		row.className = `si${isWt ? " si-wt" : ""}${s.id === getActiveSessionId() ? " active" : ""}`;
 		row.dataset.sessionId = s.id;
 
-		const stopRowTap = (e) => {
-			e.preventDefault();
-			e.stopPropagation();
-		};
-
 		const sessionLabel = (typeof s.name === "string" && s.name.trim())
 			|| (typeof s.firstMessage === "string" && s.firstMessage.trim())
 			|| s.id.slice(0, 8);
@@ -217,12 +212,12 @@ export function createSidebar({
 		const rel = formatRelativeTime(s.modified);
 		const runningIndicator = s.isRunning ? ` <span class="si-run">\u2022 running</span>` : "";
 		const needsAttention = sessionsNeedingAttention.has(s.id);
-		const attentionIndicator = needsAttention ? ` <span class="si-attention">🔔</span>` : "";
+		const attentionIndicator = needsAttention ? ` <span class="si-attention">\ud83d\udd14</span>` : "";
 
 		const name = document.createElement("div");
 		name.className = "si-name";
 		name.innerHTML = `${label}${attentionIndicator}`;
-		name.title = isWt ? `${wtName} — ${String(sessionLabel).slice(0, 60)}` : label;
+		name.title = isWt ? `${wtName} \u2014 ${String(sessionLabel).slice(0, 60)}` : label;
 
 		const meta = document.createElement("div");
 		meta.className = "si-meta";
@@ -230,73 +225,62 @@ export function createSidebar({
 
 		row.appendChild(name);
 		row.appendChild(meta);
-
-		// Worktree-specific: merge button
-		if (isWt) {
-			const mergeBtn = document.createElement("button");
-			mergeBtn.className = "si-rename";
-			mergeBtn.type = "button";
-			mergeBtn.textContent = "\u2934";
-			mergeBtn.title = `Merge branch worktree-${wtName} into the main branch (like cwm ${wtName})`;
-			mergeBtn.style.right = "74px";
-			mergeBtn.addEventListener("pointerdown", (e) => { stopRowTap(e); });
-			mergeBtn.addEventListener("click", async (e) => {
-				e.stopPropagation();
-				if (!window.confirm(`Merge branch \"worktree-${wtName}\" into the repo's current branch?\n\n\u2022 If there are uncommitted changes, they will be auto-committed first\n\u2022 If the worktree has no new commits, git will say \"Already up to date\"\n\nLike running: cwm ${wtName}`)) return;
-				try {
-					const result = await api.postJson("/api/worktree/merge", { worktreePath: s.cwd });
-					if (result.merged) {
-						onNotice(`\u2705 Merged worktree-${wtName} into main branch. ${result.message}`, "info");
-					} else {
-						onNotice(`\u274c Merge failed for worktree-${wtName}. ${result.message}`, "error");
-					}
-					void refresh({ force: true });
-				} catch (err) {
-					onNotice(err instanceof Error ? err.message : String(err), "error");
-				}
-			});
-			row.appendChild(mergeBtn);
-		}
-
-		const rename = document.createElement("button");
-		rename.className = "si-rename";
-		rename.type = "button";
-		rename.textContent = "\u270e";
-		rename.title = "Rename session";
-		rename.setAttribute("aria-label", rename.title);
-		rename.addEventListener("pointerdown", (e) => { stopRowTap(e); if (e.button !== 0) return; void renameSessionRow(s); });
-		rename.addEventListener("click", stopRowTap);
-		row.appendChild(rename);
-
-		const del = document.createElement("button");
-		del.className = "si-del";
-		del.type = "button";
-		del.textContent = "\u2715";
-		del.title = s.isRunning ? "Stop & delete" : "Delete";
-		del.setAttribute("aria-label", del.title);
-		const handleDeleteTap = () => {
-			if (del.disabled) return;
-			if (del.classList.contains("si-del-sure")) {
-				void deleteSessionRow(s, del, row);
-				return;
-			}
-			armDeleteButton(del);
-		};
-		del.addEventListener("pointerdown", (e) => { stopRowTap(e); if (e.button !== 0) return; handleDeleteTap(); });
-		del.addEventListener("click", stopRowTap);
-		del.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { stopRowTap(e); handleDeleteTap(); } });
-		row.appendChild(del);
+		// No inline buttons — use long-press for actions
 
 		row.addEventListener("click", () => {
 			highlightSessionRow(s.id);
 			void onSelectSession(s);
-			// Auto-close sidebar on phone after picking a session
 			if (window.matchMedia("(hover: none) and (pointer: coarse) and (max-width: 1024px)").matches) {
 				setOpen(false);
 			}
 		});
 
+		// Long-press or right-click for actions
+		let lpTimer = null;
+		row.addEventListener("pointerdown", () => {
+			lpTimer = setTimeout(() => { lpTimer = null; showSessionActions(s, row); }, 500);
+		});
+		row.addEventListener("pointerup", () => { if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; } });
+		row.addEventListener("pointercancel", () => { if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; } });
+		row.addEventListener("pointermove", (e) => { if (lpTimer && (Math.abs(e.movementX) > 3 || Math.abs(e.movementY) > 3)) { clearTimeout(lpTimer); lpTimer = null; } });
+		row.addEventListener("contextmenu", (e) => { e.preventDefault(); showSessionActions(s, row); });
+
 		return row;
+	}
+
+	function showSessionActions(s, row) {
+		const isWt = isWorktreePath(s.cwd);
+		const wtName = isWt ? extractWorktreeName(s.cwd) : null;
+		const existing = sessionsList.querySelector(".si-actions-sheet");
+		if (existing) existing.remove();
+
+		const sheet = document.createElement("div");
+		sheet.className = "si-actions-sheet";
+		const makeBtn = (text, onClick, danger) => {
+			const b = document.createElement("button");
+			b.className = "si-action-btn" + (danger ? " danger" : "");
+			b.textContent = text;
+			b.addEventListener("click", (e) => { e.stopPropagation(); sheet.remove(); onClick(); });
+			return b;
+		};
+		sheet.appendChild(makeBtn("Rename", () => void renameSessionRow(s)));
+		if (isWt) {
+			sheet.appendChild(makeBtn("Merge", async () => {
+				if (!window.confirm(`Merge "worktree-${wtName}" into current branch?`)) return;
+				try {
+					const result = await api.postJson("/api/worktree/merge", { worktreePath: s.cwd });
+					onNotice(result.merged ? `\u2705 Merged. ${result.message}` : `\u274c ${result.message}`, result.merged ? "info" : "error");
+					void refresh({ force: true });
+				} catch (err) { onNotice(err instanceof Error ? err.message : String(err), "error"); }
+			}));
+		}
+		sheet.appendChild(makeBtn(s.isRunning ? "Stop & Delete" : "Delete", () => {
+			if (!window.confirm(`Delete "${s.name || s.id.slice(0, 8)}"?`)) return;
+			void deleteSessionRow(s, null, row);
+		}, true));
+		row.after(sheet);
+		const dismiss = (e) => { if (!sheet.contains(e.target)) { sheet.remove(); document.removeEventListener("pointerdown", dismiss); } };
+		setTimeout(() => document.addEventListener("pointerdown", dismiss), 10);
 	}
 
 	function renderSessionList(sessions) {
