@@ -128,44 +128,14 @@ export function createMenu({
 		menuPanel.style.maxHeight = "";
 	}
 
-	function position(anchor) {
+	function position(_anchor) {
 		if (!menuPanel) return;
-
-		// On touch devices / narrow screens — center the panel as a modal
-		const isMobile = window.matchMedia("(hover: none) and (pointer: coarse)").matches || window.innerWidth <= 740;
-		if (isMobile) {
-			menuPanel.style.left = "50%";
-			menuPanel.style.top = "50%";
-			menuPanel.style.transform = "translate(-50%, -50%)";
-			menuPanel.style.width = "min(480px, 92vw)";
-			menuPanel.style.maxHeight = "min(70vh, 520px)";
-			return;
-		}
-
-		const rect = anchor.getBoundingClientRect();
-		const margin = 8;
-
-		// Clamp after render so we can read panel size.
-		requestAnimationFrame(() => {
-			const panelRect = menuPanel.getBoundingClientRect();
-			// Default: open below, centered to anchor.
-			let left = rect.left + rect.width / 2 - panelRect.width / 2;
-			let top = rect.bottom + 6;
-
-			const maxLeft = window.innerWidth - panelRect.width - margin;
-			const maxTop = window.innerHeight - panelRect.height - margin;
-
-			left = Math.max(margin, Math.min(left, maxLeft));
-			top = Math.max(margin, Math.min(top, maxTop));
-
-			// If it doesn't fit below, try above.
-			if (rect.bottom + 6 + panelRect.height > window.innerHeight - margin && rect.top - 6 - panelRect.height >= margin) {
-				top = rect.top - 6 - panelRect.height;
-			}
-
-			menuPanel.style.left = `${left}px`;
-			menuPanel.style.top = `${top}px`;
-		});
+		// Always center as a modal — consistent across phone/tablet/desktop
+		menuPanel.style.left = "50%";
+		menuPanel.style.top = "50%";
+		menuPanel.style.transform = "translate(-50%, -50%)";
+		menuPanel.style.width = "min(480px, 92vw)";
+		menuPanel.style.maxHeight = "min(70vh, 520px)";
 	}
 
 	function openMenu(anchor, build) {

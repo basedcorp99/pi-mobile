@@ -1328,8 +1328,8 @@
       justify-content: center;
       cursor: pointer;
       transition: all .25s cubic-bezier(0.4, 0, 0.2, 1);
-      /* align with the bottom of editor-inner (which has 6px bottom padding + 1px border) */
-      margin-bottom: 7px;
+      /* align with the bottom of editor-inner (4px padding + 1px border) */
+      margin-bottom: 5px;
     }
     .composer-plus:hover { background: rgba(255,255,255,0.12); }
     .composer-plus.open { transform: rotate(45deg); color: var(--accent); }
@@ -1338,7 +1338,7 @@
       align-items: flex-end;
       flex: 1;
       min-width: 0;
-      padding: 6px 6px 6px 16px;
+      padding: 4px 4px 4px 16px;
       gap: 4px;
       background: var(--surface-light);
       border: 1px solid var(--border);
@@ -1359,8 +1359,10 @@
       font-family: inherit;
       font-size: inherit;
       line-height: 1.5;
-      padding: 4px 0;
-      min-height: 24px;
+      /* vertically center single-line text with the 34px circle buttons */
+      padding: 0;
+      margin: auto 0;
+      min-height: 34px;
       max-height: 200px;
       overflow-y: auto;
       caret-color: var(--text-primary);
@@ -1368,10 +1370,9 @@
     .editor-input::placeholder { color: var(--text-muted); }
     .editor-btns {
       display: flex;
-      align-items: center;
+      align-items: flex-end;
       gap: 2px;
       flex-shrink: 0;
-      padding-bottom: 1px;
     }
     /* uniform circle buttons inside composer */
     .composer-circle {
