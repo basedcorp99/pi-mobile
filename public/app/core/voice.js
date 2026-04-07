@@ -1,6 +1,7 @@
 import { enqueueVoiceJob, listVoiceJobs, removeVoiceJob, updateVoiceJob } from "./voice_queue.js";
+import { createWebSpeechTranscriber, isWebSpeechSupported } from "./web-speech.js";
 
-export function createVoiceRecorder({ api, onTranscription, onNotice, onStateChange, onJobQueued }) {
+export function createVoiceRecorder({ api, onTranscription, onNotice, onStateChange, onJobQueued, useWebSpeech = false }) {
 	const MIC_STREAM_KEEPALIVE_MS = 10 * 60 * 1000;
 
 	let mediaRecorder = null;
@@ -108,34 +109,11 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 		transcribing = true;
 		onStateChange?.();
 		try {
-			const deliverTranscript = async (text, sourceJob) => {
-				if (typeof text !== "string" || !text.trim()) {
-					if (!options.silent) onNotice?.("Transcription returned empty.", "error");
-					return false;
-				}
-				const handled = await onTranscription?.(text, sourceJob || job);
-				if (handled === false) return false;
-				if (job.id) await removeVoiceJob(job.id);
-				return true;
-			};
-
-			if (typeof job.transcript === "string" && job.transcript.trim()) {
-				return await deliverTranscript(job.transcript, job);
-			}
-
-			const formData = new FormData();
-			const fileName = job.mimeType === "audio/mp4" ? "voice.mp4" : "voice.webm";
-			formData.append("audio", job.blob, fileName);
-			const result = await api.postFormData("/api/voice/transcribe", formData);
-			if (result.ok && result.text) {
-				const nextJob = job.id
-					? (await updateVoiceJob(job.id, { transcript: result.text, transcriptAt: Date.now() })) || { ...job, transcript: result.text }
-					: { ...job, transcript: result.text, transcriptAt: Date.now() };
-				return await deliverTranscript(result.text, nextJob);
-			}
-			if (!options.silent) onNotice?.("Transcription returned empty.", "error");
-			return false;
+			const result = await transcribeQueuedJobInternal(job, options);
+			return result;
 		} catch (error) {
+			// Clean up failed job
+			if (job.id) await removeVoiceJob(job.id);
 			if (!options.silent) onNotice?.(error instanceof Error ? error.message : String(error), "error");
 			return false;
 		} finally {
@@ -150,14 +128,66 @@ export function createVoiceRecorder({ api, onTranscription, onNotice, onStateCha
 			const jobs = await listVoiceJobs();
 			if (jobs.length === 0) return false;
 			if (!options.silent) onNotice?.("Riprendo la trascrizione del messaggio vocale…", "info");
-			for (const job of jobs) {
-				await transcribeQueuedJob(job, { silent: options.silent });
+			
+			// Process in parallel but preserve ordering for delivery
+			// Each job transcribes in parallel, but we deliver results in original order
+			const results = await Promise.all(
+				jobs.map(async (job, index) => {
+					try {
+						const result = await transcribeQueuedJobInternal(job, { silent: true });
+						return { index, job, result, error: null };
+					} catch (error) {
+						// Clean up failed job immediately
+						if (job.id) await removeVoiceJob(job.id);
+						return { index, job, result: null, error };
+					}
+				})
+			);
+			
+			// Deliver in original order to preserve transcript sequence
+			for (const { index, job, result, error } of results.sort((a, b) => a.index - b.index)) {
+				if (error && !options.silent) {
+					onNotice?.(error instanceof Error ? error.message : String(error), "error");
+				}
+				// Result already delivered by transcribeQueuedJobInternal on success
 			}
+			
 			return true;
 		} catch (error) {
 			if (!options.silent) onNotice?.(error instanceof Error ? error.message : String(error), "error");
 			return false;
 		}
+	}
+	
+	// Internal version that doesn't set global transcribing state (allows parallel)
+	async function transcribeQueuedJobInternal(job, options = {}) {
+		const deliverTranscript = async (text, sourceJob) => {
+			if (typeof text !== "string" || !text.trim()) {
+				if (!options.silent) onNotice?.("Transcription returned empty.", "error");
+				return false;
+			}
+			const handled = await onTranscription?.(text, sourceJob || job);
+			if (handled === false) return false;
+			if (job.id) await removeVoiceJob(job.id);
+			return true;
+		};
+
+		if (typeof job.transcript === "string" && job.transcript.trim()) {
+			return await deliverTranscript(job.transcript, job);
+		}
+
+		const formData = new FormData();
+		const fileName = job.mimeType === "audio/mp4" ? "voice.mp4" : "voice.webm";
+		formData.append("audio", job.blob, fileName);
+		const result = await api.postFormData("/api/voice/transcribe", formData);
+		if (result.ok && result.text) {
+			const nextJob = job.id
+				? (await updateVoiceJob(job.id, { transcript: result.text, transcriptAt: Date.now() })) || { ...job, transcript: result.text }
+				: { ...job, transcript: result.text, transcriptAt: Date.now() };
+			return await deliverTranscript(result.text, nextJob);
+		}
+		if (!options.silent) onNotice?.("Transcription returned empty.", "error");
+		return false;
 	}
 
 	async function getMicrophonePermissionState() {

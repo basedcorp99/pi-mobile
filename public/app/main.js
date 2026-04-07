@@ -4,6 +4,7 @@ import { installFaceIdGuard } from "./core/faceid.js";
 import { installPushNotifications } from "./core/push.js";
 import { fileToImageContent } from "./core/image_upload.js";
 import { createVoiceRecorder } from "./core/voice.js";
+import { isWebSpeechSupported } from "./core/web-speech.js";
 import {
 	getFaceIdEnabled,
 	getFontScalePreference,
@@ -13,11 +14,13 @@ import {
 	getThemePreference,
 	getToken,
 	getVoiceInputMode,
+	getVoiceTranscriptionMode,
 	setFontScalePreference,
 	setSendOnEnterEnabled,
 	setStreamingSendMode,
 	setThemePreference,
 	setVoiceInputMode,
+	setVoiceTranscriptionMode,
 } from "./core/storage.js";
 import { createSessionController } from "./session/controller.js";
 import { extractTextContent } from "./session/content.js";
@@ -849,6 +852,8 @@ menuCtrl = createMenu({
 		sendOnEnter,
 		fontScale,
 		voiceInputMode,
+		voiceTranscriptionMode: getVoiceTranscriptionMode(),
+		webSpeechSupported: isWebSpeechSupported(),
 		faceIdEnabled,
 		pushSupported: pushCtrl?.isSupported?.() ?? false,
 		pushSubscribed: pushCtrl?.isSubscribed?.() ?? false,
@@ -875,6 +880,22 @@ menuCtrl = createMenu({
 		voiceInputMode = voiceInputMode === VOICE_INPUT_MODE_AUTO_SEND ? VOICE_INPUT_MODE_COMPOSE : VOICE_INPUT_MODE_AUTO_SEND;
 		setVoiceInputMode(voiceInputMode);
 		updateControls();
+	},
+	onToggleVoiceTranscriptionMode: () => {
+		const current = getVoiceTranscriptionMode();
+		const next = current === "web-speech" ? "parakeet" : "web-speech";
+		setVoiceTranscriptionMode(next);
+		// Recreate voice recorder with new setting
+		if (voiceRecorder) {
+			voiceRecorder = createVoiceRecorder({
+				api,
+				onTranscription: handleVoiceTranscription,
+				onJobQueued: handleQueuedVoiceJob,
+				onNotice: sessionCtrl.appendNotice,
+				onStateChange: updateVoiceButtonState,
+				useWebSpeech: next === "web-speech",
+			});
+		}
 	},
 	onTogglePush: async () => {
 		if (!pushCtrl) return;
@@ -961,16 +982,26 @@ voiceRecorder = createVoiceRecorder({
 	onJobQueued: handleQueuedVoiceJob,
 	onNotice: sessionCtrl.appendNotice,
 	onStateChange: updateVoiceButtonState,
+	useWebSpeech: getVoiceTranscriptionMode() === "web-speech",
 });
-void voiceRecorder.resumePending({ silent: true }).finally(() => {
-	voiceUiReady = true;
-	if (btnVoice && voiceRecorder) {
-		btnVoice.classList.toggle("pending", false);
-		btnVoice.textContent = voiceRecorder.isTranscribing() ? "⏳" : "\uD83C\uDF99";
-	}
-	updateControls();
-	resumePendingVoiceIfPossible();
+
+// Set UI ready immediately - don't block on resumePending (fixes hourglass bug)
+voiceUiReady = true;
+if (btnVoice && voiceRecorder) {
+	btnVoice.classList.toggle("pending", false);
+	btnVoice.textContent = voiceRecorder.isTranscribing() ? "⏳" : "\uD83C\uDF99";
+}
+updateControls();
+
+// Resume pending jobs in background with timeout protection
+void Promise.race([
+	voiceRecorder.resumePending({ silent: true }),
+	new Promise((_, reject) => setTimeout(() => reject(new Error("resume timeout")), 5000))
+]).catch(() => {
+	// Silently ignore - will retry on visibility change
 });
+
+resumePendingVoiceIfPossible();
 let voiceWasHidden = false;
 document.addEventListener("visibilitychange", () => {
 	if (document.visibilityState === "hidden") {

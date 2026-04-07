@@ -6,7 +6,8 @@ import { randomUUID, X509Certificate } from "node:crypto";
 import { PiWebRuntime, type SessionClient } from "./session-runtime.ts";
 import { FaceIdService } from "./faceid.ts";
 import { PushService } from "./push.ts";
-import { transcribeAudio } from "./voice.ts";
+import { transcribeAudio, getVoiceStatus } from "./voice.ts";
+import { getVoiceNativeStatus, loadModels as loadVoiceModels } from "./voice-native.ts";
 
 // Resolve pi-subagents from npm global root (avoid hardcoding /usr/lib/...)
 const _npmGlobalRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf-8" }).trim();
@@ -789,6 +790,25 @@ Bun.serve({
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				return errorResponse(message, 400);
+			}
+		}
+
+		if (req.method === "GET" && url.pathname === "/api/voice/status") {
+			const status = getVoiceStatus();
+			return json(status, 200);
+		}
+
+		if (req.method === "POST" && url.pathname === "/api/voice/warm") {
+			// Pre-load models to make first transcription fast
+			try {
+				if (getVoiceNativeStatus().available) {
+					void loadVoiceModels();
+					return json({ ok: true, warming: true }, 200);
+				}
+				return json({ ok: true, warming: false, reason: "native not available" }, 200);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return errorResponse(message, 500);
 			}
 		}
 

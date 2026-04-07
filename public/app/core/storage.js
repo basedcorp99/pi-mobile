@@ -101,6 +101,17 @@ export function setVoiceInputMode(mode) {
 	safeLocalStorageSet("piWebVoiceInputMode", mode === "auto-send" ? "auto-send" : "compose");
 }
 
+export function getVoiceTranscriptionMode() {
+	const stored = safeLocalStorageGet("piWebVoiceTranscriptionMode");
+	if (stored === "web-speech") return "web-speech";
+	if (stored === "parakeet") return "parakeet";
+	return "parakeet"; // default
+}
+
+export function setVoiceTranscriptionMode(mode) {
+	safeLocalStorageSet("piWebVoiceTranscriptionMode", mode === "web-speech" ? "web-speech" : "parakeet");
+}
+
 export function getStreamingSendMode() {
 	return safeLocalStorageGet("piWebStreamingSendMode") === "followUp" ? "followUp" : "steer";
 }

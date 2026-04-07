@@ -98,6 +98,7 @@ export function createMenu({
 	onToggleSendOnEnter,
 	onAdjustFontScale,
 	onToggleVoiceInputMode,
+	onToggleVoiceTranscriptionMode,
 	onTogglePush,
 	onTestPush,
 	onSetSteeringMode,
@@ -572,6 +573,21 @@ export function createMenu({
 					if (typeof onToggleVoiceInputMode === "function") onToggleVoiceInputMode();
 					renderSettings();
 				},
+			}));
+			const webSpeechSupported = typeof prefs.webSpeechSupported === "boolean" ? prefs.webSpeechSupported : false;
+			body.appendChild(makeSetting({
+				name: "Transcription",
+				value: prefs.voiceTranscriptionMode === "web-speech" ? "web-speech (fast)" : "parakeet (accurate)",
+				description: webSpeechSupported
+					? (prefs.voiceTranscriptionMode === "web-speech"
+						? "Browser-native speech recognition. Faster but less accurate, esp. for code."
+						: "Local ONNX model. More accurate but slower. Requires server setup.")
+					: "Parakeet (local ONNX) - more accurate. Web Speech API not available in this browser.",
+				active: prefs.voiceTranscriptionMode === "web-speech" && webSpeechSupported,
+				onClick: webSpeechSupported ? () => {
+					if (typeof onToggleVoiceTranscriptionMode === "function") onToggleVoiceTranscriptionMode();
+					renderSettings();
+				} : undefined,
 			}));
 			body.appendChild(makeSetting({
 				name: "Notifications",

@@ -337,33 +337,13 @@ if command -v zoxide &>/dev/null; then
 fi
 
 # ── 9. Voice transcription (Parakeet) ────────────────────────────
-PARAKEET_BIN="$BIN_DIR/parakeet-transcribe"
 PARAKEET_MODEL_DIR="$HOME/.local/share/parakeet-tdt-0.6b-v3-int8"
 PARAKEET_URL="https://blob.handy.computer/parakeet-v3-int8.tar.gz"
 
 install_voice() {
-  info "Setting up voice transcription (Parakeet)..."
+  info "Setting up voice transcription..."
 
-  # Check python3
-  if ! command -v python3 &>/dev/null; then
-    err "python3 not found — voice transcription requires python3"
-    return 1
-  fi
-
-  # Check/install python deps
-  local missing_deps=()
-  python3 -c "import numpy" 2>/dev/null || missing_deps+=("numpy")
-  python3 -c "import onnxruntime" 2>/dev/null || missing_deps+=("onnxruntime")
-  if [[ ${#missing_deps[@]} -gt 0 ]]; then
-    info "Installing Python deps: ${missing_deps[*]}"
-    python3 -m pip install --quiet --upgrade "${missing_deps[@]}" || {
-      err "Failed to install Python deps. Try: pip install ${missing_deps[*]}"
-      return 1
-    }
-  fi
-  ok "Python deps ready (numpy, onnxruntime)"
-
-  # Check ffmpeg
+  # Check ffmpeg (still needed for audio conversion)
   if ! command -v ffmpeg &>/dev/null; then
     warn "ffmpeg not found — voice transcription needs it for audio conversion"
     warn "Install with: sudo apt-get install -y ffmpeg  (or brew install ffmpeg)"
@@ -371,16 +351,8 @@ install_voice() {
     ok "ffmpeg found"
   fi
 
-  # Install parakeet-transcribe script
-  # Copy from repo and patch MODEL_DIR to use ~/.local/share
-  sed "s|MODEL_DIR = .*|MODEL_DIR = \"$PARAKEET_MODEL_DIR\"|" \
-    "$SCRIPT_DIR/parakeet-transcribe" > "$PARAKEET_BIN" 2>/dev/null || {
-    # If not in repo, generate it
-    warn "parakeet-transcribe not found in repo, skipping script install"
-    return 1
-  }
-  chmod +x "$PARAKEET_BIN"
-  ok "Installed parakeet-transcribe → $PARAKEET_BIN"
+  # onnxruntime-node is already installed via bun install
+  info "Voice uses native ONNX Runtime (already installed with dependencies)"
 
   # Download model if needed
   if [[ -d "$PARAKEET_MODEL_DIR" ]] && [[ -f "$PARAKEET_MODEL_DIR/nemo128.onnx" ]]; then
@@ -403,6 +375,8 @@ install_voice() {
     fi
   done < "$SCRIPT_DIR/PARAKEET_MODEL_FILES.txt"
   $all_good && ok "All model files present"
+
+  info "Voice is ready! First transcription will load models (~2-3s), then instant."
 }
 
 if [[ "$VOICE_FLAG" == "yes" ]]; then
@@ -430,7 +404,7 @@ echo "  Service:  sudo systemctl restart pi-mobile"
 echo "  Logs:     journalctl -u pi-mobile -f"
 echo "  Override: PI_MOBILE_HOST=127.0.0.1 PI_MOBILE_PORT=4317 ./setup.sh"
 echo ""
-if [[ ! -f "$PARAKEET_BIN" ]]; then
+if [[ ! -d "$PARAKEET_MODEL_DIR" ]] || [[ ! -f "$PARAKEET_MODEL_DIR/nemo128.onnx" ]]; then
   echo "  Voice: not installed (run ./setup.sh --all to add)"
 fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
