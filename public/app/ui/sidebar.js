@@ -230,7 +230,7 @@ export function createSidebar({
 		const moreBtn = document.createElement("button");
 		moreBtn.className = "si-more";
 		moreBtn.type = "button";
-		moreBtn.textContent = "\u22ef";
+		moreBtn.textContent = "\u2022\u2022";
 		moreBtn.title = "Actions";
 		moreBtn.addEventListener("click", (e) => { e.stopPropagation(); showSessionActions(s, row); });
 		row.appendChild(moreBtn);
@@ -307,12 +307,20 @@ export function createSidebar({
 		consecutiveRefreshFailures = 0;
 		sessionsList.innerHTML = "";
 
-		// New session button at top
-		const newBtn = document.createElement("div");
-		newBtn.className = "si si-new";
-		newBtn.innerHTML = `<div class="si-name">＋ New Session</div><div class="si-meta">tap to pick a directory</div>`;
+		// New session / project buttons at top
+		const newRow = document.createElement("div");
+		newRow.className = "si-new-row";
+		const newBtn = document.createElement("button");
+		newBtn.className = "si-new-btn";
+		newBtn.textContent = "＋ Session";
 		newBtn.addEventListener("click", () => void showNewSessionPicker());
-		sessionsList.appendChild(newBtn);
+		const newProjBtn = document.createElement("button");
+		newProjBtn.className = "si-new-btn si-new-proj";
+		newProjBtn.textContent = "＋ Project";
+		newProjBtn.addEventListener("click", () => void showNewProjectDialog());
+		newRow.appendChild(newBtn);
+		newRow.appendChild(newProjBtn);
+		sessionsList.appendChild(newRow);
 
 		const searchWrap = document.createElement("div");
 		searchWrap.className = "sessions-search-wrap";
@@ -923,15 +931,7 @@ export function createSidebar({
 	if (btnSidebarRight) {
 		btnSidebarRight.innerHTML = `<span class="txt">＋</span>`;
 		btnSidebarRight.onclick = () => void showNewSessionPicker();
-		// Long-press or right-click for "New Project"
-		let lpRight = null;
-		btnSidebarRight.addEventListener("pointerdown", () => {
-			lpRight = setTimeout(() => { lpRight = null; void showNewProjectDialog(); }, 500);
-		});
-		btnSidebarRight.addEventListener("pointerup", () => { if (lpRight) { clearTimeout(lpRight); lpRight = null; } });
-		btnSidebarRight.addEventListener("pointercancel", () => { if (lpRight) { clearTimeout(lpRight); lpRight = null; } });
-		btnSidebarRight.addEventListener("contextmenu", (e) => { e.preventDefault(); void showNewProjectDialog(); });
-		btnSidebarRight.title = "New session (hold for new project)";
+		btnSidebarRight.title = "New session";
 	}
 
 	// Poll for session state changes (streaming → done) every 5s
