@@ -985,7 +985,7 @@
     }
 
     /* every block owns its top gap */
-    .user-msg, .tool-box, .bash-block, .assistant-block { margin-top: 1em; }
+    .user-msg, .tool-box, .tool-card, .bash-block, .assistant-block { margin-top: 1em; }
 
     /* ── User message ── full-width tinted band ────────── */
     .user-msg {
@@ -1043,12 +1043,44 @@
       padding: 0 16px;
     }
 
+    .thinking-wrap {
+      margin-bottom: 6px;
+    }
+    .thinking-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 500;
+      padding: 2px 0;
+      transition: color .15s;
+    }
+    .thinking-toggle:hover { color: var(--text-secondary); }
+    .thinking-chev {
+      transition: transform .15s;
+    }
+    .thinking-wrap.collapsed .thinking-chev {
+      transform: rotate(-90deg);
+    }
+    .thinking-wrap.collapsed .thinking-text {
+      display: none;
+    }
     .thinking-text {
       color: var(--text-muted);
       font-style: italic;
       white-space: pre-wrap;
       word-break: break-word;
+      padding-left: 16px;
+      border-left: 2px solid var(--border);
+      margin-top: 4px;
+      max-height: 300px;
+      overflow-y: auto;
     }
+
     .thinking-label { color: var(--text-muted); font-style: italic; }
 
     .notice-text {
@@ -1212,10 +1244,9 @@
     }
 
     /* ── Tool execution box ── card style like Litter ─────── */
+    /* legacy tool-box kept for backward compat (e.g. release CLI box) */
     .tool-box {
       padding: 10px 16px;
-      margin-left: 12px;
-      margin-right: 12px;
       border-radius: var(--radius-md);
       white-space: pre-wrap;
       word-break: break-word;
@@ -1224,22 +1255,84 @@
       gap: 6px;
       border: 1px solid var(--border);
     }
-    .tool-box.pending { background: rgba(126, 200, 192, 0.04); border-color: var(--border); }
+    .tool-box.pending { background: rgba(126, 200, 192, 0.04); }
     .tool-box.success { background: rgba(110, 166, 118, 0.06); border-color: rgba(110, 166, 118, 0.12); }
     .tool-box.error   { background: rgba(255, 85, 85, 0.06); border-color: rgba(255, 85, 85, 0.12); }
     .tool-title { font-weight: 600; color: var(--text-primary); }
-    .subagent-meta {
-      color: var(--text-muted);
-      font-size: 13px;
-    }
+    .subagent-meta { color: var(--text-muted); font-size: 13px; }
     .subagent-body { margin-top: 2px; }
-    .tool-call  { color: var(--text-primary); font-weight: 600; font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 0.9em; }
+
+    /* ── Tool card (collapsible) ─────────────────── */
+    .tool-card {
+      margin: 6px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      transition: border-color .15s;
+    }
+    .tool-card.pending { background: rgba(126, 200, 192, 0.03); }
+    .tool-card.success { background: rgba(110, 166, 118, 0.04); border-color: rgba(110, 166, 118, 0.1); }
+    .tool-card.error   { background: rgba(255, 85, 85, 0.04); border-color: rgba(255, 85, 85, 0.1); }
+    .tool-card-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      transition: background .1s;
+    }
+    .tool-card-header:active { background: rgba(255,255,255,0.03); }
+    .tool-card-header svg:first-child { flex-shrink: 0; color: var(--text-muted); }
+    .tool-card.success .tool-card-header svg:first-child { color: var(--success); }
+    .tool-card.error .tool-card-header svg:first-child { color: var(--danger); }
+    .tool-card.pending .tool-card-header svg:first-child { color: var(--warning); }
+    .tool-card-summary {
+      flex: 1;
+      min-width: 0;
+      font-family: "SF Mono", ui-monospace, Menlo, monospace;
+      font-size: 0.85em;
+      font-weight: 500;
+      color: var(--text-body);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .tool-card-meta {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+    .tool-card.success .tool-card-meta { color: var(--success); }
+    .tool-card.error .tool-card-meta { color: var(--danger); }
+    .tool-card-chev {
+      flex-shrink: 0;
+      color: var(--text-muted);
+      transition: transform .15s;
+    }
+    .tool-card.collapsed .tool-card-chev { transform: rotate(-90deg); }
+    .tool-status-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .tool-status-dot.pending { background: var(--warning); animation: voice-pulse 1s ease-in-out infinite; }
+    .tool-status-dot.success { background: var(--success); }
+    .tool-status-dot.error { background: var(--danger); }
+    .tool-card-body {
+      padding: 0 12px 10px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .tool-card-body[hidden] { display: none; }
+    .tool-call  { color: var(--text-primary); font-weight: 600; font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 0.85em; }
     .tool-call:empty { display: none; }
-    .tool-out   { color: var(--text-secondary); font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 0.88em; }
+    .tool-out   { color: var(--text-secondary); font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 0.83em; margin-top: 4px; }
     .tool-trunc { color: var(--text-muted); }
-    .exp-key { color: var(--text-muted); cursor: pointer; transition: color .15s; }
-    .exp-key:hover { color: var(--text-secondary); }
-    .exp-desc { color: var(--text-secondary); }
+    .exp-key { color: var(--accent); cursor: pointer; transition: color .15s; }
+    .exp-key:hover { color: var(--text-primary); }
     .expandable { display: none; }
     .expandable.open { display: block; }
 
@@ -1736,9 +1829,10 @@
     body.light .app-header { background: var(--surface-glass); border-bottom-color: var(--border); }
     body.light .app-logo { color: var(--text-primary); }
     body.light .user-msg { background: rgba(45, 138, 126, 0.04); border-color: rgba(45, 138, 126, 0.05); }
-    body.light .tool-box.pending { background: rgba(0, 0, 0, 0.02); border-color: var(--border); }
-    body.light .tool-box.success { background: rgba(46, 125, 50, 0.05); border-color: rgba(46, 125, 50, 0.1); }
-    body.light .tool-box.error { background: rgba(211, 47, 47, 0.05); border-color: rgba(211, 47, 47, 0.1); }
+    body.light .tool-box.pending, body.light .tool-card.pending { background: rgba(0, 0, 0, 0.02); border-color: var(--border); }
+    body.light .tool-box.success, body.light .tool-card.success { background: rgba(46, 125, 50, 0.04); border-color: rgba(46, 125, 50, 0.1); }
+    body.light .tool-box.error, body.light .tool-card.error { background: rgba(211, 47, 47, 0.04); border-color: rgba(211, 47, 47, 0.1); }
+    body.light .tool-card-header:active { background: rgba(0,0,0,0.03); }
     body.light .md pre { background: var(--code-bg); border-color: var(--border); }
     body.light .md pre code { color: var(--text-body); }
     body.light .codeblock { background: var(--code-bg); border-color: var(--border); }

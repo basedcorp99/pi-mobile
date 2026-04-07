@@ -242,9 +242,20 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 		const block = document.createElement("div");
 		block.className = "assistant-block";
 
+		// Collapsible thinking disclosure (expanded by default)
+		const thinkingWrap = document.createElement("div");
+		thinkingWrap.className = "thinking-wrap";
+		thinkingWrap.style.display = "none";
+		const thinkingToggle = document.createElement("div");
+		thinkingToggle.className = "thinking-toggle";
+		thinkingToggle.innerHTML = `<svg class="thinking-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg><span>Thinking</span>`;
 		const thinking = document.createElement("div");
 		thinking.className = "thinking-text";
-		thinking.style.display = "none";
+		thinkingWrap.appendChild(thinkingToggle);
+		thinkingWrap.appendChild(thinking);
+		thinkingToggle.addEventListener("click", () => {
+			thinkingWrap.classList.toggle("collapsed");
+		});
 
 		const text = document.createElement("div");
 		text.className = "md";
@@ -261,12 +272,12 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 		copyBtn.hidden = true;
 		actions.appendChild(copyBtn);
 
-		block.appendChild(thinking);
+		block.appendChild(thinkingWrap);
 		block.appendChild(text);
 		block.appendChild(actions);
 		msgsEl.appendChild(block);
 
-		const state = { block, text, thinking, actions, copyBtn, rawText: "", rawThinking: "" };
+		const state = { block, text, thinking, thinkingWrap, actions, copyBtn, rawText: "", rawThinking: "" };
 		copyBtn.addEventListener("click", async (event) => {
 			event.preventDefault();
 			event.stopPropagation();
@@ -381,7 +392,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 				if (!block.rawThinking || parsed.thinking.length >= block.rawThinking.length) {
 					block.rawThinking = parsed.thinking;
 				}
-				block.thinking.style.display = "";
+				block.thinkingWrap.style.display = "";
 				block.thinking.classList.add("shown");
 				block.thinking.textContent = block.rawThinking;
 			}
@@ -617,7 +628,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 			const block = ensureAssistantBlock();
 			if ((update.type === "thinking_delta" || update.type === "reasoning_delta") && typeof update.delta === "string") {
 				block.rawThinking += update.delta;
-				block.thinking.style.display = "";
+				block.thinkingWrap.style.display = "";
 				block.thinking.classList.add("shown");
 				block.thinking.textContent = block.rawThinking;
 			} else if (update.type === "text_delta" && typeof update.delta === "string") {
