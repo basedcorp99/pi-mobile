@@ -622,13 +622,15 @@ export class PiWebRuntime {
 					}, 5 * 60 * 1000);
 				});
 			},
-			async custom() {
-				self.broadcast(sessionId, {
-					type: "ui_notify",
-					message: "This command needs a custom TUI/overlay, which pi-mobile does not support yet.",
-					level: "warning",
-				});
-				return undefined;
+			async custom(title: string, options: Array<{ label: string; value: unknown } | string>) {
+				// Fallback for clarify dialogs and other custom UIs — use the working select UI
+				if (!options?.length) return undefined;
+				const labels = options.map((o) => (typeof o === "string" ? o : o.label));
+				const selected = await this.select(title || "Choose", labels);
+				if (selected === undefined) return undefined;
+				// Map back to original option object (pi-subagents clarify expects the option, not just the value)
+				const idx = labels.indexOf(selected);
+				return options[idx];
 			},
 			pasteToEditor() {},
 			setEditorText() {},

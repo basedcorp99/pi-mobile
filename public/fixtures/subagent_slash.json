@@ -19,6 +19,18 @@
       "messages": []
     }
   },
+
+  {
+    "type": "agent_event",
+    "event": {
+      "type": "message_start",
+      "message": {
+        "role": "assistant",
+        "content": [{ "type": "text", "text": "I'll launch a scout to explore the auth module — back shortly." }]
+      }
+    }
+  },
+
   {
     "type": "agent_event",
     "event": {
@@ -27,44 +39,54 @@
         "role": "custom",
         "customType": "subagent-slash-result",
         "display": true,
-        "content": "Analyze auth flow",
+        "content": "Explore auth module",
         "details": {
-          "requestId": "req-subagent-1",
+          "requestId": "req-single-1",
           "result": {
-            "content": [
-              { "type": "text", "text": "Analyze auth flow" }
-            ],
+            "content": [{ "type": "text", "text": "Explore auth module" }],
             "details": {
               "mode": "single",
               "results": [
                 {
                   "agent": "scout",
-                  "task": "Analyze auth flow",
-                  "exitCode": 0,
+                  "task": "Explore auth module",
+                  "exitCode": -1,
                   "messages": [],
                   "usage": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "cost": 0, "turns": 0 },
                   "progress": {
                     "agent": "scout",
+                    "index": 0,
                     "status": "running",
-                    "task": "Analyze auth flow",
-                    "recentTools": [],
+                    "task": "Explore auth module",
+                    "currentTool": "grep",
+                    "currentToolArgs": "{\"pattern\": \"/tokenize|authenticate|session/\", \"path\": \"src/auth/\"}",
+                    "recentTools": [
+                      { "tool": "find", "args": "{\"pattern\": \"*.ts\", \"path\": \"src/auth\"}", "endMs": 1200 },
+                      { "tool": "read", "args": "{\"file_path\": \"src/auth/index.ts\"}", "endMs": 2100 }
+                    ],
                     "recentOutput": [],
-                    "toolCount": 0,
-                    "tokens": 0,
-                    "durationMs": 0
+                    "toolCount": 3,
+                    "tokens": 8400,
+                    "durationMs": 3200
                   }
                 }
               ],
               "progress": [
                 {
                   "agent": "scout",
+                  "index": 0,
                   "status": "running",
-                  "task": "Analyze auth flow",
-                  "recentTools": [],
+                  "task": "Explore auth module",
+                  "currentTool": "grep",
+                  "currentToolArgs": "{\"pattern\": \"/tokenize|authenticate|session/\", \"path\": \"src/auth/\"}",
+                  "recentTools": [
+                    { "tool": "find", "args": "{\"pattern\": \"*.ts\", \"path\": \"src/auth\"}", "endMs": 1200 },
+                    { "tool": "read", "args": "{\"file_path\": \"src/auth/index.ts\"}", "endMs": 2100 }
+                  ],
                   "recentOutput": [],
-                  "toolCount": 0,
-                  "tokens": 0,
-                  "durationMs": 0
+                  "toolCount": 3,
+                  "tokens": 8400,
+                  "durationMs": 3200
                 }
               ]
             }
@@ -73,6 +95,7 @@
       }
     }
   },
+
   {
     "type": "agent_event",
     "event": {
@@ -81,31 +104,168 @@
         "role": "custom",
         "customType": "subagent-slash-result",
         "display": false,
-        "content": "## Findings\n\n- Found auth flow in `src/auth.ts`",
+        "content": "## Auth Module\n\n- **Entry**: `src/auth/index.ts` — exports `createSession`, `verifyToken`\n- **Session handling**: `src/auth/session.ts` — JWT-based, 24h expiry\n- **Middleware**: `src/auth/middleware.ts` — validates Bearer tokens on all `/api/*` routes\n- **Models**: `src/auth/types.ts` — `User`, `Session`, `TokenPayload`\n\n### Key function\n```ts\nexport async function verifyToken(token: string): Promise<TokenPayload> {\n  return jwt.verify(token, process.env.JWT_SECRET);\n}\n```",
         "details": {
-          "requestId": "req-subagent-1",
+          "requestId": "req-single-1",
           "result": {
-            "content": [
-              { "type": "text", "text": "## Findings\n\n- Found auth flow in `src/auth.ts`" }
-            ],
+            "content": [{ "type": "text", "text": "## Auth Module\n\n- **Entry**: `src/auth/index.ts` — exports `createSession`, `verifyToken`\n- **Session handling**: `src/auth/session.ts` — JWT-based, 24h expiry\n- **Middleware**: `src/auth/middleware.ts` — validates Bearer tokens on all `/api/*` routes\n- **Models**: `src/auth/types.ts` — `User`, `Session`, `TokenPayload`\n\n### Key function\n```ts\nexport async function verifyToken(token: string): Promise<TokenPayload> {\n  return jwt.verify(token, process.env.JWT_SECRET);\n}\n```" }],
             "details": {
               "mode": "single",
               "results": [
                 {
                   "agent": "scout",
-                  "task": "Analyze auth flow",
+                  "task": "Explore auth module",
                   "exitCode": 0,
+                  "finalOutput": "## Auth Module\n\n- **Entry**: `src/auth/index.ts` — exports `createSession`, `verifyToken`\n- **Session handling**: `src/auth/session.ts` — JWT-based, 24h expiry\n- **Middleware**: `src/auth/middleware.ts` — validates Bearer tokens on all `/api/*` routes\n- **Models**: `src/auth/types.ts` — `User`, `Session`, `TokenPayload`\n\n### Key function\n```ts\nexport async function verifyToken(token: string): Promise<TokenPayload> {\n  return jwt.verify(token, process.env.JWT_SECRET);\n}\n```",
                   "messages": [],
-                  "usage": { "input": 123, "output": 45, "cacheRead": 0, "cacheWrite": 0, "cost": 0.001, "turns": 1 },
+                  "usage": { "input": 2100, "output": 380, "cacheRead": 0, "cacheWrite": 0, "cost": 0.004, "turns": 4 },
                   "progress": {
                     "agent": "scout",
+                    "index": 0,
                     "status": "completed",
-                    "task": "Analyze auth flow",
+                    "task": "Explore auth module",
                     "recentTools": [],
                     "recentOutput": [],
-                    "toolCount": 3,
-                    "tokens": 168,
-                    "durationMs": 2200
+                    "toolCount": 7,
+                    "tokens": 18600,
+                    "durationMs": 8400
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+
+  {
+    "type": "agent_event",
+    "event": {
+      "type": "message_start",
+      "message": {
+        "role": "assistant",
+        "content": [{ "type": "text", "text": "Launching two scouts in parallel to map auth and DB layers simultaneously." }]
+      }
+    }
+  },
+
+  {
+    "type": "agent_event",
+    "event": {
+      "type": "message_start",
+      "message": {
+        "role": "custom",
+        "customType": "subagent-slash-result",
+        "display": true,
+        "content": "Parallel scouts",
+        "details": {
+          "requestId": "req-parallel-1",
+          "result": {
+            "content": [{ "type": "text", "text": "Parallel scouts" }],
+            "details": {
+              "mode": "parallel",
+              "results": [
+                {
+                  "agent": "scout",
+                  "task": "Find all auth-related files",
+                  "exitCode": -1,
+                  "messages": [],
+                  "usage": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "cost": 0, "turns": 0 },
+                  "progress": {
+                    "agent": "scout", "index": 0, "status": "running",
+                    "task": "Find all auth-related files",
+                    "currentTool": "grep",
+                    "currentToolArgs": "{\"pattern\": \"/auth|session|token/\", \"path\": \"src/\"}",
+                    "recentTools": [
+                      { "tool": "find", "args": "{\"pattern\": \"*.ts\", \"path\": \"src/\"}", "endMs": 800 }
+                    ],
+                    "recentOutput": [], "toolCount": 2, "tokens": 4200, "durationMs": 1800
+                  }
+                },
+                {
+                  "agent": "scout",
+                  "task": "Find all database query files",
+                  "exitCode": -1,
+                  "messages": [],
+                  "usage": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "cost": 0, "turns": 0 },
+                  "progress": {
+                    "agent": "scout", "index": 1, "status": "running",
+                    "task": "Find all database query files",
+                    "currentTool": "read",
+                    "currentToolArgs": "{\"file_path\": \"src/db/queries.ts\"}",
+                    "recentTools": [
+                      { "tool": "grep", "args": "{\"pattern\": \"/prisma|knex|sql/\", \"path\": \"src/\"}", "endMs": 1100 }
+                    ],
+                    "recentOutput": [], "toolCount": 3, "tokens": 6100, "durationMs": 2300
+                  }
+                }
+              ],
+              "progress": [
+                {
+                  "agent": "scout", "index": 0, "status": "running",
+                  "currentTool": "grep",
+                  "currentToolArgs": "{\"pattern\": \"/auth|session|token/\", \"path\": \"src/\"}",
+                  "recentTools": [
+                    { "tool": "find", "args": "{\"pattern\": \"*.ts\", \"path\": \"src/\"}", "endMs": 800 }
+                  ],
+                  "recentOutput": [], "toolCount": 2, "tokens": 4200, "durationMs": 1800
+                },
+                {
+                  "agent": "scout", "index": 1, "status": "running",
+                  "currentTool": "read",
+                  "currentToolArgs": "{\"file_path\": \"src/db/queries.ts\"}",
+                  "recentTools": [
+                    { "tool": "grep", "args": "{\"pattern\": \"/prisma|knex|sql/\", \"path\": \"src/\"}", "endMs": 1100 }
+                  ],
+                  "recentOutput": [], "toolCount": 3, "tokens": 6100, "durationMs": 2300
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+
+  {
+    "type": "agent_event",
+    "event": {
+      "type": "message_start",
+      "message": {
+        "role": "custom",
+        "customType": "subagent-slash-result",
+        "display": false,
+        "content": "Both scouts complete.",
+        "details": {
+          "requestId": "req-parallel-1",
+          "result": {
+            "content": [{ "type": "text", "text": "Both scouts complete." }],
+            "details": {
+              "mode": "parallel",
+              "results": [
+                {
+                  "agent": "scout",
+                  "task": "Find all auth-related files",
+                  "exitCode": 0,
+                  "finalOutput": "## Auth files\n\n- `src/auth/index.ts` — main exports\n- `src/auth/session.ts` — session management\n- `src/auth/middleware.ts` — route guard\n- `src/auth/types.ts` — shared types",
+                  "messages": [],
+                  "usage": { "input": 1800, "output": 220, "cacheRead": 0, "cacheWrite": 0, "cost": 0.002, "turns": 3 },
+                  "progress": {
+                    "agent": "scout", "index": 0, "status": "completed",
+                    "recentTools": [], "recentOutput": [], "toolCount": 5, "tokens": 12300, "durationMs": 4100
+                  }
+                },
+                {
+                  "agent": "scout",
+                  "task": "Find all database query files",
+                  "exitCode": 0,
+                  "finalOutput": "## DB files\n\n- `src/db/queries.ts` — raw SQL helpers\n- `src/db/prisma.ts` — Prisma client singleton\n- `src/db/migrations/` — 14 migration files\n- `src/db/types.ts` — generated Prisma types",
+                  "messages": [],
+                  "usage": { "input": 2100, "output": 190, "cacheRead": 0, "cacheWrite": 0, "cost": 0.002, "turns": 3 },
+                  "progress": {
+                    "agent": "scout", "index": 1, "status": "completed",
+                    "recentTools": [], "recentOutput": [], "toolCount": 6, "tokens": 14800, "durationMs": 5200
                   }
                 }
               ]

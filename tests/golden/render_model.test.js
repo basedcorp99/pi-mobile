@@ -246,16 +246,23 @@ describe("golden: render model", () => {
 
 	test("subagent slash result updates inline card", async () => {
 		const events = await loadFixture("subagent_slash");
-		expect(applySseEvents(events)).toEqual([
-			{
-				type: "subagent",
-				requestId: "req-subagent-1",
-				status: "success",
-				title: "subagent scout",
-				summary: "done",
-				text: "## Findings\n\n- Found auth flow in `src/auth.ts`",
-			},
-		]);
+		const blocks = applySseEvents(events);
+		expect(blocks).toContainEqual({
+			type: "subagent",
+			requestId: "req-single-1",
+			status: "success",
+			title: "subagent scout",
+			summary: "done",
+			text: expect.stringContaining("## Auth Module"),
+		});
+		expect(blocks).toContainEqual({
+			type: "subagent",
+			requestId: "req-parallel-1",
+			status: "success",
+			title: "subagent parallel (2)",
+			summary: "2/2 ok",
+			text: "Both scouts complete.",
+		});
 	});
 
 	test("assistant text survives when only present on message_end after tool call", async () => {
