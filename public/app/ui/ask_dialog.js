@@ -39,6 +39,7 @@ export function createAskDialog({ host, getSendOnEnter }) {
 		scrim.addEventListener("click", (event) => {
 			event.preventDefault();
 			event.stopPropagation();
+			close(undefined, true);
 		});
 		panel = document.createElement("div");
 		panel.className = "ask-session-panel";

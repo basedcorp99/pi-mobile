@@ -721,7 +721,7 @@
     @media (hover: none) and (pointer: coarse) {
       .si-more { display: none !important; }
     }
-    .si { position: relative; }
+    .si { position: relative; -webkit-user-select: none; user-select: none; }
     /* Long-press action sheet */
     .si-actions-sheet {
       display: flex;
