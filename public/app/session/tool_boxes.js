@@ -152,6 +152,13 @@ export function createToolBoxManager({ msgsEl, scrollToBottom }) {
 		}
 	}
 
+	function remove(toolCallId) {
+		const entry = toolBoxes.get(toolCallId);
+		if (!entry) return;
+		entry.box.remove();
+		toolBoxes.delete(toolCallId);
+	}
+
 	function hasPendingTools() {
 		for (const entry of toolBoxes.values()) {
 			if (entry.box.classList.contains("pending")) return true;
@@ -174,6 +181,7 @@ export function createToolBoxManager({ msgsEl, scrollToBottom }) {
 		setCall,
 		setText,
 		setStatus,
+		remove,
 		hasPendingTools,
 		markPendingToolsAborted,
 	};

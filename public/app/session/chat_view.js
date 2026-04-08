@@ -7,6 +7,58 @@ import { parseSubagentSlashMessage } from "./subagent_slash.js";
 import { parseReviewSummaryMessage } from "./review_summary.js";
 import { createToolBoxManager } from "./tool_boxes.js";
 
+// ── Subagent card helpers ─────────────────────────────────────────────────────
+
+function saFormatTokens(n) {
+	if (!n || n < 100) return "";
+	if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+	return String(n);
+}
+
+function saFormatDuration(ms) {
+	if (!ms || ms < 200) return "";
+	if (ms >= 1000) return (ms / 1000).toFixed(1).replace(/\.0$/, "") + "s";
+	return ms + "ms";
+}
+
+function saFormatTool(tool, argsJson) {
+	let a = {};
+	try { a = argsJson ? JSON.parse(argsJson) : {}; } catch { /* ignore */ }
+	const p = (s) => (s || "").replace(/^\/root\//, "~/").replace(/^\/home\/[^/]+\//, "~/");
+	const short = (s, n = 50) => s && s.length > n ? s.slice(0, n) + "…" : (s || "");
+	switch (tool) {
+		case "read": return "read " + p(a.file_path || a.path || "");
+		case "grep": {
+			const pat = short(a.pattern || "", 30);
+			const ph = p(a.path || "");
+			return pat && ph ? `grep ${pat} in ${ph}` : pat ? `grep ${pat}` : "grep";
+		}
+		case "bash": return "$ " + short(a.command || "", 60);
+		case "write": return "write " + p(a.file_path || a.path || "");
+		case "edit": return "edit " + p(a.file_path || a.path || "");
+		case "find": {
+			const pat = a.pattern || "";
+			const ph = p(a.path || ".");
+			return pat ? `find ${pat} in ${ph}` : `find in ${ph}`;
+		}
+		case "ls": return "ls " + p(a.path || ".");
+		default: return tool || "…";
+	}
+}
+
+// Build a "7 tools · 12.4k · 3.2s" stats string from agent data
+function saAgentStats(a) {
+	const parts = [];
+	if (a.toolCount) parts.push(a.toolCount + " tool" + (a.toolCount === 1 ? "" : "s"));
+	const tok = saFormatTokens(a.tokens);
+	if (tok) parts.push(tok);
+	const dur = saFormatDuration(a.durationMs);
+	if (dur) parts.push(dur);
+	return parts.join(" · ");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 function normalizeUserContent(content) {
 	if (typeof content === "string") {
 		return [{ type: "text", text: content }];
@@ -91,6 +143,8 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 	let recentUserFingerprints = [];
 	let subagentCards = new Map();
 	let reviewCards = new Map();
+	let subagentToolCallIds = new Set(); // tool call IDs for LLM-initiated subagent calls
+	let subagentToolCallArgs = new Map(); // toolCallId -> start args (for fallback on cancellation)
 	let suppressAutoScroll = false;
 	let autoStickToBottom = true;
 	let internalScroll = false;
@@ -218,6 +272,8 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 		recentUserFingerprints = [];
 		subagentCards = new Map();
 		reviewCards = new Map();
+		subagentToolCallIds = new Set();
+		subagentToolCallArgs = new Map();
 		autoStickToBottom = true;
 		// Re-append saved notices at top
 		for (const n of savedNotices) msgsEl.appendChild(n);
@@ -440,38 +496,310 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 		if (shouldAutoStick()) scrollToBottom(true);
 	}
 
+	// Build a fake subagent-slash-result message from tool execution events
+	// so LLM-initiated subagent calls use the same card rendering as slash-bridge ones.
+	function upsertSubagentCardFromToolEvent(toolCallId, toolResult, startArgs, opts = {}) {
+		const phase = opts.phase || "update"; // start | update | end
+		const isError = Boolean(opts.isError);
+		let details = toolResult?.details;
+		// If result has no steps (e.g. chain cancelled before running), fall back to args
+		// so we still show agent names and expected step count.
+		const fallbackArgs = startArgs || subagentToolCallArgs.get(toolCallId) || null;
+		if (details && Array.isArray(details.results) && details.results.length === 0 && fallbackArgs) {
+			details = null;
+		}
+
+		if (!details && fallbackArgs) {
+			const args = fallbackArgs;
+			const hasTasks = Array.isArray(args.tasks) && args.tasks.length > 0;
+			const hasChain = Array.isArray(args.chain) && args.chain.length > 0;
+			const mode = hasTasks ? "parallel" : hasChain ? "chain" : "single";
+			const status = phase === "end" ? (isError ? "failed" : "completed") : "running";
+			const exitCode = phase === "end" ? (isError ? 1 : 0) : -1;
+			const aggregatedOutput = phase === "end" ? String(toolResultToText(toolResult) || "").trim() : "";
+			const makeResult = (agent, task, idx) => ({
+				agent: agent || "agent",
+				task: task || "",
+				exitCode,
+				finalOutput: mode === "single" ? aggregatedOutput : undefined,
+				messages: [],
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+				progress: { agent: agent || "agent", index: idx, status, task: task || "", recentTools: [], recentOutput: [], toolCount: 0, tokens: 0, durationMs: 0 },
+			});
+			let results;
+			if (hasTasks) results = args.tasks.map((t, i) => makeResult(t.agent, t.task, i));
+			else if (hasChain) results = args.chain.map((s, i) => makeResult(s.agent, s.task, i));
+			else results = [makeResult(args.agent, args.task, 0)];
+			if (aggregatedOutput && results.length > 1 && !results[0].finalOutput) {
+				results[0].finalOutput = aggregatedOutput;
+			}
+			details = { mode, results, progress: results.map((r) => r.progress) };
+		}
+
+		if (!details) return false;
+
+		upsertSubagentCard({
+			customType: "subagent-slash-result",
+			details: {
+				requestId: toolCallId,
+				result: { content: toolResult?.content || [], details },
+			},
+		});
+		return true;
+	}
+
+
 	function upsertSubagentCard(message) {
 		const data = parseSubagentSlashMessage(message);
 		if (!data) return false;
 
 		let entry = subagentCards.get(data.requestId);
+
+		// ── Create card on first appearance ──
 		if (!entry) {
 			const box = document.createElement("div");
-			const title = document.createElement("div");
-			title.className = "tool-title";
-			const meta = document.createElement("div");
-			meta.className = "subagent-meta";
-			const body = document.createElement("div");
-			body.className = "md subagent-body";
-			box.appendChild(title);
-			box.appendChild(meta);
-			box.appendChild(body);
+			box.className = "tool-box pending subagent-result";
+
+			const header = document.createElement("div");
+			header.className = "tool-header";
+
+			const iconEl = document.createElement("span");
+			iconEl.className = "tool-header-icon";
+
+			const labelEl = document.createElement("span");
+			labelEl.className = "tool-header-label";
+
+			const metaEl = document.createElement("span");
+			metaEl.className = "tool-header-meta";
+
+			const chevEl = document.createElement("span");
+			chevEl.className = "tool-header-chev";
+			chevEl.textContent = "▾";
+			chevEl.style.visibility = "hidden";
+
+			header.appendChild(iconEl);
+			header.appendChild(labelEl);
+			header.appendChild(metaEl);
+			header.appendChild(chevEl);
+			box.appendChild(header);
+
+			const bodyEl = document.createElement("div");
+			bodyEl.className = "tool-body";
+			box.appendChild(bodyEl);
+
 			msgsEl.appendChild(box);
-			entry = { box, title, meta, body };
+
+			header.addEventListener("click", () => {
+				if (chevEl.style.visibility !== "hidden") box.classList.toggle("collapsed");
+			});
+
+			entry = { box, iconEl, labelEl, metaEl, chevEl, bodyEl, agentRowEls: [], listEl: null };
 			subagentCards.set(data.requestId, entry);
 		}
 
-		entry.box.className = `tool-box subagent-result ${data.status}`;
-		entry.title.textContent = data.title;
-		if (data.summary) {
-			entry.meta.textContent = data.summary;
-			entry.meta.style.display = "";
+		const { box, iconEl, labelEl, metaEl, chevEl, bodyEl } = entry;
+		const isParallel = data.mode === "parallel" || (data.mode === "chain" && data.total > 1);
+
+		// ── Single agent ──
+		if (!isParallel) {
+			const a = data.agents[0] ?? {};
+			const stats = saAgentStats(a);
+
+			if (data.hasRunning) {
+				// Running: show spinner + live activity
+				box.className = "tool-box pending subagent-result";
+				iconEl.innerHTML = "<span class=\"sa-spinner\"></span>";
+				labelEl.textContent = a.name || data.title;
+				metaEl.textContent = stats;
+				chevEl.style.visibility = "hidden";
+
+				// Activity lines
+				bodyEl.innerHTML = "";
+				if (a.currentTool) {
+					const curr = document.createElement("div");
+					curr.className = "sa-current";
+					curr.textContent = "▸ " + saFormatTool(a.currentTool, a.currentToolArgs);
+					bodyEl.appendChild(curr);
+				}
+				for (const rt of [...(a.recentTools || [])].reverse()) {
+					const line = document.createElement("div");
+					line.className = "sa-recent";
+					line.textContent = "  " + saFormatTool(rt.tool, rt.args);
+					bodyEl.appendChild(line);
+				}
+			} else {
+				// Done: show result, collapsed
+				const isErr = data.status === "error";
+				box.className = `tool-box ${isErr ? "error" : "success"} subagent-result collapsed`;
+				iconEl.innerHTML = isErr
+					? "<span class=\"sa-icon-err\">✗</span>"
+					: "<span class=\"sa-icon-ok\">✓</span>";
+				labelEl.textContent = a.name || data.title;
+				metaEl.textContent = stats;
+				chevEl.style.visibility = "";
+
+				bodyEl.innerHTML = "";
+				const mdEl = document.createElement("div");
+				mdEl.className = "md sa-body";
+				renderMarkdown(mdEl, data.body || "(no output)");
+				bodyEl.appendChild(mdEl);
+			}
+
+		// ── Parallel / multi-step chain ──
 		} else {
-			entry.meta.textContent = "";
-			entry.meta.style.display = "none";
+			// Group header
+			if (data.hasRunning) {
+				box.className = "tool-box pending subagent-result";
+				iconEl.innerHTML = "<span class=\"sa-spinner\"></span>";
+				labelEl.textContent = data.title;
+				metaEl.textContent = `${data.completed}/${data.total}`;
+				chevEl.style.visibility = "hidden";
+			} else {
+				const isErr = data.status === "error";
+				box.className = `tool-box ${isErr ? "error" : "success"} subagent-result collapsed`;
+				iconEl.innerHTML = isErr
+					? "<span class=\"sa-icon-err\">✗</span>"
+					: "<span class=\"sa-icon-ok\">✓</span>";
+				labelEl.textContent = data.title;
+				// Aggregate stats across all agents
+				const totTools = data.agents.reduce((s, a) => s + (a.toolCount || 0), 0);
+				const maxDur = Math.max(...data.agents.map((a) => a.durationMs || 0));
+				const parts = [];
+				if (totTools) parts.push(totTools + " tool" + (totTools === 1 ? "" : "s"));
+				const dur = saFormatDuration(maxDur);
+				if (dur) parts.push(dur);
+				metaEl.textContent = parts.join(" · ");
+				chevEl.style.visibility = "";
+			}
+
+			// Ensure container exists and grow rows as agents appear over time.
+			if (!entry.listEl) {
+				bodyEl.innerHTML = "";
+				const listEl = document.createElement("div");
+				listEl.className = "sa-agent-list";
+				bodyEl.appendChild(listEl);
+				entry.listEl = listEl;
+			}
+
+			while (entry.agentRowEls.length < data.agents.length) {
+				const rowEl = document.createElement("div");
+				rowEl.className = "sa-agent-row";
+
+				const rowHdr = document.createElement("div");
+				rowHdr.className = "sa-agent-hdr";
+
+				const rowIcon = document.createElement("span");
+				rowIcon.className = "sa-agent-icon";
+
+				const rowName = document.createElement("span");
+				rowName.className = "sa-agent-name";
+
+				const rowStats = document.createElement("span");
+				rowStats.className = "sa-agent-stats";
+
+				const rowChev = document.createElement("span");
+				rowChev.className = "sa-agent-chev";
+				rowChev.textContent = "▾";
+				rowChev.style.visibility = "hidden";
+
+				const rowBody = document.createElement("div");
+				rowBody.className = "sa-agent-body";
+				rowBody.style.display = "none";
+
+				rowHdr.appendChild(rowIcon);
+				rowHdr.appendChild(rowName);
+				rowHdr.appendChild(rowStats);
+				rowHdr.appendChild(rowChev);
+				rowEl.appendChild(rowHdr);
+				rowEl.appendChild(rowBody);
+				entry.listEl.appendChild(rowEl);
+
+				rowHdr.addEventListener("click", (e) => {
+					e.stopPropagation();
+					if (rowChev.style.visibility !== "hidden") {
+						const open = rowBody.style.display !== "none";
+						rowBody.style.display = open ? "none" : "";
+						rowChev.style.transform = open ? "" : "rotate(-90deg)";
+					}
+				});
+
+				entry.agentRowEls.push({ rowEl, rowIcon, rowName, rowStats, rowChev, rowBody, rendered: false, lastOutput: "" });
+			}
+
+			// Update each agent row
+			for (let i = 0; i < entry.agentRowEls.length; i++) {
+				const r = entry.agentRowEls[i];
+				const a = data.agents[i];
+				if (!a) {
+					r.rowEl.style.display = "none";
+					continue;
+				}
+				r.rowEl.style.display = "";
+				r.rowName.textContent = a.name;
+
+				if (a.status === "running") {
+					r.rendered = false;
+					r.lastOutput = "";
+					r.rowIcon.innerHTML = "<span class=\"sa-spinner sa-spinner-sm\"></span>";
+					r.rowStats.textContent = saAgentStats(a);
+					r.rowChev.style.visibility = "hidden";
+					r.rowChev.style.transform = "";
+					r.rowEl.className = "sa-agent-row sa-agent-running";
+					// Auto-expand body to show live activity
+					r.rowBody.style.display = "";
+					r.rowBody.innerHTML = "";
+					if (a.currentTool) {
+						const curr = document.createElement("div");
+						curr.className = "sa-current";
+						curr.textContent = "▸ " + saFormatTool(a.currentTool, a.currentToolArgs);
+						r.rowBody.appendChild(curr);
+					}
+					for (const rt of [...(a.recentTools || [])].reverse()) {
+						const line = document.createElement("div");
+						line.className = "sa-recent";
+						line.textContent = "  " + saFormatTool(rt.tool, rt.args);
+						r.rowBody.appendChild(line);
+					}
+				} else if (a.status === "pending") {
+					r.rendered = false;
+					r.lastOutput = "";
+					r.rowIcon.textContent = "·";
+					r.rowStats.textContent = "queued";
+					r.rowChev.style.visibility = "hidden";
+					r.rowChev.style.transform = "";
+					r.rowEl.className = "sa-agent-row sa-agent-pending";
+					r.rowBody.style.display = "none";
+				} else {
+					const failed = a.status === "failed";
+					r.rowIcon.innerHTML = failed ? "<span class=\"sa-icon-err\">✗</span>" : "<span class=\"sa-icon-ok\">✓</span>";
+					r.rowStats.textContent = saAgentStats(a) || (failed ? "failed" : "");
+					r.rowEl.className = `sa-agent-row ${failed ? "sa-agent-failed" : "sa-agent-completed"}`;
+					const output = typeof a.output === "string" ? a.output : "";
+					if (output) {
+						r.rowChev.style.visibility = "";
+						if (!r.rendered || r.lastOutput !== output) {
+							r.rowChev.style.transform = "";
+							r.rendered = true;
+							r.lastOutput = output;
+							r.rowBody.innerHTML = "";
+							r.rowBody.style.display = "none";
+							const mdEl = document.createElement("div");
+							mdEl.className = "md";
+							renderMarkdown(mdEl, output);
+							r.rowBody.appendChild(mdEl);
+						}
+					} else {
+						r.rendered = false;
+						r.lastOutput = "";
+						r.rowBody.style.display = "none";
+						r.rowChev.style.visibility = "hidden";
+						r.rowChev.style.transform = "";
+					}
+				}
+			}
 		}
+
 		const stick = shouldAutoStick();
-		renderMarkdown(entry.body, data.body || "(no output)");
 		if (stick) scrollToBottom(true);
 		return true;
 	}
@@ -526,6 +854,13 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 				const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : safeRandomUUID();
 				const toolName = typeof m.toolName === "string" ? m.toolName : "tool";
 				const isError = Boolean(m.isError);
+				if (toolName === "subagent") {
+					const rendered = upsertSubagentCardFromToolEvent(toolCallId, m, null, { phase: "end", isError });
+					if (rendered) {
+						if (tools.has(toolCallId)) tools.remove(toolCallId);
+						continue;
+					}
+				}
 				const contentText = extractTextContent(m.content);
 				if (!tools.has(toolCallId)) {
 					tools.ensure(toolCallId, toolName, isError ? "error" : "success");
@@ -675,17 +1010,43 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 		}
 
 		if (event.type === "tool_execution_start") {
-			if (tools.has(event.toolCallId)) {
-				tools.setStatus(event.toolCallId, "pending");
+			if (event.toolName === "subagent") {
+				subagentToolCallIds.add(event.toolCallId);
+				subagentToolCallArgs.set(event.toolCallId, event.args);
+				const rendered = upsertSubagentCardFromToolEvent(event.toolCallId, null, event.args, { phase: "start" });
+				if (rendered) {
+					if (tools.has(event.toolCallId)) tools.remove(event.toolCallId);
+				} else {
+					if (tools.has(event.toolCallId)) tools.setStatus(event.toolCallId, "pending");
+					else tools.ensure(event.toolCallId, event.toolName, "pending");
+					tools.setCall(event.toolCallId, event.toolName, event.args);
+					tools.setText(event.toolCallId, event.toolName, "");
+				}
 			} else {
-				tools.ensure(event.toolCallId, event.toolName, "pending");
+				if (tools.has(event.toolCallId)) {
+					tools.setStatus(event.toolCallId, "pending");
+				} else {
+					tools.ensure(event.toolCallId, event.toolName, "pending");
+				}
+				tools.setCall(event.toolCallId, event.toolName, event.args);
+				tools.setText(event.toolCallId, event.toolName, "");
 			}
-			tools.setCall(event.toolCallId, event.toolName, event.args);
-			tools.setText(event.toolCallId, event.toolName, "");
 			return;
 		}
 
 		if (event.type === "tool_execution_update") {
+			if (subagentToolCallIds.has(event.toolCallId)) {
+				const rendered = upsertSubagentCardFromToolEvent(event.toolCallId, event.partialResult, null, { phase: "update" });
+				if (rendered) {
+					if (tools.has(event.toolCallId)) tools.remove(event.toolCallId);
+				} else {
+					if (!tools.has(event.toolCallId)) tools.ensure(event.toolCallId, event.toolName, "pending");
+					const stick = isPhoneLikeFn() && shouldAutoStick();
+					tools.setText(event.toolCallId, event.toolName, toolResultToText(event.partialResult));
+					if (stick) scrollToBottom(true);
+				}
+				return;
+			}
 			if (!tools.has(event.toolCallId)) return;
 			const stick = isPhoneLikeFn() && shouldAutoStick();
 			tools.setText(event.toolCallId, event.toolName, toolResultToText(event.partialResult));
@@ -694,6 +1055,23 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 		}
 
 		if (event.type === "tool_execution_end") {
+			if (subagentToolCallIds.has(event.toolCallId)) {
+				const rendered = upsertSubagentCardFromToolEvent(event.toolCallId, event.result, null, { phase: "end", isError: event.isError });
+				if (rendered) {
+					if (tools.has(event.toolCallId)) tools.remove(event.toolCallId);
+				} else {
+					const stick = isPhoneLikeFn() && shouldAutoStick();
+					if (!tools.has(event.toolCallId)) {
+						tools.ensure(event.toolCallId, event.toolName, event.isError ? "error" : "success");
+					}
+					tools.setStatus(event.toolCallId, event.isError ? "error" : "success");
+					tools.setText(event.toolCallId, event.toolName, toolResultToText(event.result));
+					if (stick) scrollToBottom(true);
+				}
+				subagentToolCallIds.delete(event.toolCallId);
+				subagentToolCallArgs.delete(event.toolCallId);
+				return;
+			}
 			const stick = isPhoneLikeFn() && shouldAutoStick();
 			if (!tools.has(event.toolCallId)) {
 				tools.ensure(event.toolCallId, event.toolName, event.isError ? "error" : "success");

@@ -14,13 +14,45 @@ function isCompletedResult(result) {
 	return Boolean(result) && Number(result.exitCode || 0) === 0 && !isRunningResult(result);
 }
 
-export function parseSubagentSlashMessage(message) {
-	if (!message || message.customType !== SUBAGENT_SLASH_RESULT_TYPE) return null;
+/** Get live AgentProgress for a single result index. Top-level progress array
+ *  is used during streaming; the per-result .progress field is used in final messages. */
+function getProgress(resultDetails, results, index) {
+	const topLevel = Array.isArray(resultDetails?.progress) ? resultDetails.progress[index] : null;
+	const perResult = results[index]?.progress ?? null;
+	return topLevel || perResult || null;
+}
 
-	const details = message.details;
-	const requestId = typeof details?.requestId === "string" ? details.requestId : "";
-	const result = details?.result;
-	const resultDetails = result?.details;
+/** Extract final text output from a SingleResult (finalOutput field or last assistant message). */
+function extractAgentOutput(result) {
+	if (result?.finalOutput) return result.finalOutput;
+	const messages = Array.isArray(result?.messages) ? result.messages : [];
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (msg?.role === "assistant" && Array.isArray(msg.content)) {
+			for (const part of msg.content) {
+				if (part?.type === "text" && part.text) return part.text;
+			}
+		}
+	}
+	return "";
+}
+
+export function parseSubagentSlashMessage(message) {
+	const isCustomSubagent = Boolean(message && message.customType === SUBAGENT_SLASH_RESULT_TYPE);
+	const isToolSubagent = Boolean(message && message.role === "toolResult" && message.toolName === "subagent");
+	if (!isCustomSubagent && !isToolSubagent) return null;
+
+	const details = message?.details;
+	const requestId = typeof details?.requestId === "string"
+		? details.requestId
+		: typeof message?.toolCallId === "string"
+			? message.toolCallId
+			: "";
+	const result = details?.result
+		|| (isToolSubagent ? { content: message.content, details: message.details } : null);
+	const resultDetails = result?.details
+		|| details?.details
+		|| (Array.isArray(details?.results) ? details : null);
 	const results = Array.isArray(resultDetails?.results) ? resultDetails.results : null;
 	if (!requestId || !results) return null;
 
@@ -60,6 +92,38 @@ export function parseSubagentSlashMessage(message) {
 		|| extractTextContent(message.content)
 		|| (typeof message.content === "string" ? message.content : "");
 
+	// --- Rich per-agent data ---
+	const agents = results.map((r, i) => {
+		const p = getProgress(resultDetails, results, i);
+		const pStatus = p?.status ?? null;
+		const isRunning = pStatus === "running" || isRunningResult(r);
+		// exitCode -1 = still running/queued placeholder
+		const isPending = r.exitCode === -1 && !isRunning;
+		const agentStatus = isRunning
+			? "running"
+			: isPending
+				? "pending"
+				: isFailedResult(r)
+					? "failed"
+					: "completed";
+
+		return {
+			name: typeof r.agent === "string" ? r.agent : "agent",
+			status: agentStatus,
+			currentTool: p?.currentTool ?? null,
+			currentToolArgs: p?.currentToolArgs ?? null,
+			recentTools: Array.isArray(p?.recentTools) ? p.recentTools.slice(-3) : [],
+			toolCount: p?.toolCount ?? 0,
+			tokens: p?.tokens ?? 0,
+			durationMs: p?.durationMs ?? 0,
+			// Only include output for completed/failed agents
+			output: (agentStatus === "completed" || agentStatus === "failed") ? extractAgentOutput(r) : "",
+		};
+	});
+
+	// Convenience top-level stats for single-agent mode (first agent)
+	const a0 = agents[0] ?? {};
+
 	return {
 		requestId,
 		status,
@@ -71,5 +135,14 @@ export function parseSubagentSlashMessage(message) {
 		completed,
 		failed,
 		hasRunning,
+		// Rich data
+		agents,
+		// Single-agent shortcuts (same as agents[0] fields)
+		currentTool: a0.currentTool ?? null,
+		currentToolArgs: a0.currentToolArgs ?? null,
+		recentTools: a0.recentTools ?? [],
+		toolCount: a0.toolCount ?? 0,
+		tokens: a0.tokens ?? 0,
+		durationMs: a0.durationMs ?? 0,
 	};
 }
