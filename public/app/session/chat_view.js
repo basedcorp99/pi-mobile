@@ -1,11 +1,25 @@
 import { safeRandomUUID } from "../core/uuid.js";
 import { safeStringify } from "../core/stringify.js";
-import { toolResultToText } from "../core/tool_format.js";
+import { toolResultToText, toolResultExtractImages } from "../core/tool_format.js";
 import { renderMarkdown, renderMarkdownThrottled } from "../render/markdown.js";
 import { extractTextContent, parseAssistantContent } from "./content.js";
 import { parseSubagentSlashMessage } from "./subagent_slash.js";
 import { parseReviewSummaryMessage } from "./review_summary.js";
 import { createToolBoxManager } from "./tool_boxes.js";
+
+// ── Extract image blocks from message content ────────────────────────────────
+
+function extractImagesFromContent(content) {
+	if (typeof content === "string" || !Array.isArray(content)) return [];
+	const images = [];
+	for (const block of content) {
+		if (!block || typeof block !== "object") continue;
+		if (block.type === "image" && typeof block.mimeType === "string" && typeof block.data === "string") {
+			images.push({ mimeType: block.mimeType, data: block.data });
+		}
+	}
+	return images;
+}
 
 // ── Subagent card helpers ─────────────────────────────────────────────────────
 
@@ -867,6 +881,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 				}
 				tools.setStatus(toolCallId, isError ? "error" : "success");
 				tools.setText(toolCallId, toolName, contentText || safeStringify(m.content));
+				tools.setImages(toolCallId, extractImagesFromContent(m.content));
 			} else if (m.customType || m.role === "custom") {
 				if (upsertSubagentCard(m)) continue;
 				if (upsertReviewCard(m)) continue;
@@ -1043,6 +1058,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 					if (!tools.has(event.toolCallId)) tools.ensure(event.toolCallId, event.toolName, "pending");
 					const stick = isPhoneLikeFn() && shouldAutoStick();
 					tools.setText(event.toolCallId, event.toolName, toolResultToText(event.partialResult));
+					tools.setImages(event.toolCallId, toolResultExtractImages(event.partialResult));
 					if (stick) scrollToBottom(true);
 				}
 				return;
@@ -1050,6 +1066,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 			if (!tools.has(event.toolCallId)) return;
 			const stick = isPhoneLikeFn() && shouldAutoStick();
 			tools.setText(event.toolCallId, event.toolName, toolResultToText(event.partialResult));
+				tools.setImages(event.toolCallId, toolResultExtractImages(event.partialResult));
 			if (stick) scrollToBottom(true);
 			return;
 		}
@@ -1066,6 +1083,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 					}
 					tools.setStatus(event.toolCallId, event.isError ? "error" : "success");
 					tools.setText(event.toolCallId, event.toolName, toolResultToText(event.result));
+					tools.setImages(event.toolCallId, toolResultExtractImages(event.result));
 					if (stick) scrollToBottom(true);
 				}
 				subagentToolCallIds.delete(event.toolCallId);
@@ -1078,6 +1096,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 			}
 			tools.setStatus(event.toolCallId, event.isError ? "error" : "success");
 			tools.setText(event.toolCallId, event.toolName, toolResultToText(event.result));
+				tools.setImages(event.toolCallId, toolResultExtractImages(event.result));
 			if (stick) scrollToBottom(true);
 			return;
 		}

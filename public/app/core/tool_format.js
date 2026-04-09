@@ -36,6 +36,20 @@ export function toolCallToText(toolName, args) {
 	return toolName;
 }
 
+export function toolResultExtractImages(result) {
+	if (typeof result === "string" || !result || typeof result !== "object") return [];
+	const content = Array.isArray(result.content) ? result.content : null;
+	if (!content) return [];
+	const images = [];
+	for (const block of content) {
+		if (!block || typeof block !== "object") continue;
+		if (block.type === "image" && typeof block.mimeType === "string" && typeof block.data === "string") {
+			images.push({ mimeType: block.mimeType, data: block.data });
+		}
+	}
+	return images;
+}
+
 export function toolResultToText(result) {
 	if (typeof result === "string") return result;
 	if (!result || typeof result !== "object") return safeStringify(result);
@@ -49,7 +63,7 @@ export function toolResultToText(result) {
 		if (block.type === "text" && typeof block.text === "string") {
 			out.push(block.text);
 		} else if (block.type === "image" && typeof block.mimeType === "string") {
-			out.push(`[image: ${block.mimeType}]`);
+			// Images are rendered separately via toolResultExtractImages
 		}
 	}
 	return out.join("\n").trimEnd();

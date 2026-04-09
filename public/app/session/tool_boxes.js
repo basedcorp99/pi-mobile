@@ -60,6 +60,7 @@ export function createToolBoxManager({ msgsEl, scrollToBottom }) {
 			expanded: false,
 			callText: "",
 			fullText: "",
+			images: [],
 			startTime: Date.now(),
 		};
 		toolBoxes.set(toolCallId, entry);
@@ -69,6 +70,37 @@ export function createToolBoxManager({ msgsEl, scrollToBottom }) {
 
 	function ensure(toolCallId, toolName, status = "pending") {
 		return toolBoxes.get(toolCallId) || appendToolBox(toolCallId, toolName, status);
+	}
+
+	function renderToolBoxImages(toolCallId) {
+		const entry = toolBoxes.get(toolCallId);
+		if (!entry) return;
+
+		// Remove old image container if any
+		const oldContainer = entry.box.querySelector(".tool-images");
+		if (oldContainer) oldContainer.remove();
+
+		if (!entry.images || entry.images.length === 0) return;
+
+		const container = document.createElement("div");
+		container.className = "tool-images";
+
+		for (const img of entry.images) {
+			const imgEl = document.createElement("img");
+			imgEl.className = "tool-image";
+			imgEl.alt = "Tool result image";
+			imgEl.loading = "lazy";
+			imgEl.decoding = "async";
+			imgEl.src = `data:${img.mimeType};base64,${img.data}`;
+			imgEl.addEventListener("click", () => {
+				// Open full-size in new tab
+				window.open(imgEl.src, "_blank");
+			});
+			container.appendChild(imgEl);
+		}
+
+		// Insert after the body
+		entry.body.after(container);
 	}
 
 	function renderToolBoxText(toolCallId) {
@@ -140,6 +172,13 @@ export function createToolBoxManager({ msgsEl, scrollToBottom }) {
 		renderToolBoxText(toolCallId);
 	}
 
+	function setImages(toolCallId, images) {
+		const entry = toolBoxes.get(toolCallId);
+		if (!entry) return;
+		entry.images = images;
+		renderToolBoxImages(toolCallId);
+	}
+
 	function setStatus(toolCallId, status) {
 		const entry = toolBoxes.get(toolCallId);
 		if (!entry) return;
@@ -180,6 +219,7 @@ export function createToolBoxManager({ msgsEl, scrollToBottom }) {
 		has: (toolCallId) => toolBoxes.has(toolCallId),
 		setCall,
 		setText,
+		setImages,
 		setStatus,
 		remove,
 		hasPendingTools,

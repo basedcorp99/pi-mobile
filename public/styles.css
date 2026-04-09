@@ -1434,6 +1434,21 @@
     }
     .tool-box.collapsed .tool-header-chev { transform: rotate(-90deg); }
     .tool-box.collapsed .tool-body { display: none; }
+    .tool-box.collapsed .tool-images { display: none; }
+    .tool-images {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 0 0 4px 0;
+    }
+    .tool-image {
+      max-width: min(320px, 80vw);
+      height: auto;
+      border-radius: var(--radius-md, 6px);
+      border: 1px solid var(--border, #333);
+      background: var(--surface, #1a1a1a);
+      cursor: pointer;
+    }
     .tool-body {
       margin-top: 4px;
     }
