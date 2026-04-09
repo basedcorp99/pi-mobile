@@ -179,6 +179,12 @@ export function createSidebar({
 		sidebar.classList.toggle("open", isOpen);
 		if (sidebarOverlay) sidebarOverlay.classList.toggle("open", isOpen);
 		document.body?.classList?.toggle("sidebar-open", isOpen);
+		// Reset picker state when closing so the sidebar always reopens to the session list
+		if (!open && viewMode === "picker") {
+			viewMode = "sessions";
+			if (sidebarLabel) sidebarLabel.textContent = "Sessions";
+			void refresh({ force: true });
+		}
 	}
 
 	function toggleOpen() { setOpen(!isOpen); }
@@ -422,7 +428,7 @@ export function createSidebar({
 				addBtn.title = "New worktree session";
 				addBtn.addEventListener("click", (e) => {
 					e.stopPropagation();
-					void showWorktreeForm(repoRoot, true);
+					void showWorktreeForm(repoRoot);
 				});
 				hdrWrap.appendChild(addBtn);
 				sessionsList.appendChild(hdrWrap);
