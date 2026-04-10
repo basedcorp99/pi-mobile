@@ -48,6 +48,10 @@ function shouldShowSession(s) {
 	return first && first !== "(no messages)";
 }
 
+function resolveProjectDialogBackHandler(options, fallback) {
+	return typeof options?.onBack === "function" ? options.onBack : fallback;
+}
+
 export function createSidebar({
 	sessionsList,
 	sidebar,
@@ -320,19 +324,14 @@ export function createSidebar({
 		consecutiveRefreshFailures = 0;
 		sessionsList.innerHTML = "";
 
-		// New session / project buttons at top
+		// Keep the primary CTA focused on starting a session.
 		const newRow = document.createElement("div");
 		newRow.className = "si-new-row";
 		const newBtn = document.createElement("button");
 		newBtn.className = "si-new-btn";
 		newBtn.textContent = "＋ Session";
 		newBtn.addEventListener("click", () => void showNewSessionPicker());
-		const newProjBtn = document.createElement("button");
-		newProjBtn.className = "si-new-btn si-new-proj";
-		newProjBtn.textContent = "＋ Project";
-		newProjBtn.addEventListener("click", () => void showNewProjectDialog());
 		newRow.appendChild(newBtn);
-		newRow.appendChild(newProjBtn);
 		sessionsList.appendChild(newRow);
 
 		const searchWrap = document.createElement("div");
@@ -438,8 +437,62 @@ export function createSidebar({
 
 
 	}
+	function restoreSessionsView() {
+		viewMode = "sessions";
+		if (sidebarLabel) sidebarLabel.textContent = "Sessions";
+		void refresh({ force: true });
+	}
 
-	async function showNewProjectDialog() {
+	async function loadLaunchAgents() {
+		try {
+			const data = await api.getJson("/api/agents");
+			return (Array.isArray(data?.agents) ? data.agents : [])
+				.filter((agent) => agent && agent.scope === "user" && typeof agent.name === "string" && agent.name.trim())
+				.map((agent) => ({ name: agent.name.trim(), description: typeof agent.description === "string" ? agent.description.trim() : "" }))
+				.sort((a, b) => a.name.localeCompare(b.name));
+		} catch {
+			return [];
+		}
+	}
+
+	function addLaunchAgentField(container, state) {
+		const label = document.createElement("label");
+		label.className = "agent-launcher-label";
+		label.textContent = "Start with agent (optional)";
+		label.style.display = "none";
+		const select = document.createElement("select");
+		select.className = "sessions-search";
+		const defaultOption = document.createElement("option");
+		defaultOption.value = "";
+		defaultOption.textContent = "Default agent";
+		select.appendChild(defaultOption);
+		select.addEventListener("change", () => {
+			state.value = select.value.trim();
+		});
+		label.appendChild(select);
+		container.appendChild(label);
+		void loadLaunchAgents().then((agents) => {
+			if (!Array.isArray(agents) || agents.length === 0) return;
+			label.style.display = "flex";
+			for (const agent of agents) {
+				const option = document.createElement("option");
+				option.value = agent.name;
+				option.textContent = agent.description ? `${agent.name} — ${agent.description}` : agent.name;
+				select.appendChild(option);
+			}
+			if (state.value && agents.some((agent) => agent.name === state.value)) {
+				select.value = state.value;
+			} else {
+				state.value = "";
+			}
+		});
+		return select;
+	}
+
+
+	async function showNewProjectDialog(options = {}) {
+		const onBack = resolveProjectDialogBackHandler(options, restoreSessionsView);
+		const launchAgent = { value: typeof options?.initialAgent === "string" ? options.initialAgent.trim() : "" };
 		viewMode = "picker";
 		sessionsList.innerHTML = "";
 		if (sidebarLabel) sidebarLabel.textContent = "New Project";
@@ -447,11 +500,7 @@ export function createSidebar({
 		const backBtn = document.createElement("div");
 		backBtn.className = "si si-new";
 		backBtn.innerHTML = `<div class="si-name">← Back</div>`;
-		backBtn.addEventListener("click", () => {
-			viewMode = "sessions";
-			if (sidebarLabel) sidebarLabel.textContent = "Sessions";
-			void refresh({ force: true });
-		});
+		backBtn.addEventListener("click", () => { onBack(); });
 		sessionsList.appendChild(backBtn);
 
 		const form = document.createElement("div");
@@ -466,6 +515,7 @@ export function createSidebar({
 		input.placeholder = "my-new-project";
 		label.appendChild(input);
 		form.appendChild(label);
+		addLaunchAgentField(form, launchAgent);
 
 		const hint = document.createElement("div");
 		hint.className = "si-meta new-session-empty";
@@ -490,7 +540,7 @@ export function createSidebar({
 				const result = await api.postJson("/api/dirs/create", { path });
 				const cwd = result.path;
 				// Start session in the new directory
-				const sessionResult = await api.postJson("/api/sessions", { clientId, cwd, forceNew: true });
+				const sessionResult = await api.postJson("/api/sessions", { clientId, cwd, forceNew: true, startAgent: launchAgent.value });
 				viewMode = "sessions";
 				onSessionIdSelected(sessionResult.sessionId);
 				setOpen(false);
@@ -512,10 +562,11 @@ export function createSidebar({
 		setTimeout(() => input.focus(), 0);
 	}
 
-	async function showNewSessionPicker() {
+	async function showNewSessionPicker(options = {}) {
 		viewMode = "picker";
 		let currentResults = [];
 		let recentDirs = [];
+		const launchAgent = { value: typeof options?.initialAgent === "string" ? options.initialAgent.trim() : "" };
 
 		// Fetch recent/known repos in background (non-blocking)
 		const reposPromise = api.getJson("/api/repos").then((data) => {
@@ -531,12 +582,15 @@ export function createSidebar({
 		const backBtn = document.createElement("div");
 		backBtn.className = "si si-new";
 		backBtn.innerHTML = `<div class="si-name">← Back</div>`;
-		backBtn.addEventListener("click", () => {
-			viewMode = "sessions";
-			if (sidebarLabel) sidebarLabel.textContent = "Sessions";
-			void refresh({ force: true });
-		});
+		backBtn.addEventListener("click", () => { restoreSessionsView(); });
 		sessionsList.appendChild(backBtn);
+
+		const projectBtn = document.createElement("div");
+		projectBtn.className = "si si-new";
+		projectBtn.innerHTML = `<div class="si-name">＋ New Project</div><div class="si-meta new-session-empty">Create a fresh folder under /root and open a session</div>`;
+		projectBtn.addEventListener("click", () => void showNewProjectDialog({ onBack: () => void showNewSessionPicker({ initialAgent: launchAgent.value }), initialAgent: launchAgent.value }));
+		sessionsList.appendChild(projectBtn);
+		addLaunchAgentField(sessionsList, launchAgent);
 
 		// Fuzzy search input
 		const inputRow = document.createElement("div");
@@ -603,7 +657,7 @@ export function createSidebar({
 				name.textContent = shortPath(cwd);
 				name.title = cwd;
 				row.appendChild(name);
-				row.addEventListener("click", () => void startInDir(cwd));
+				row.addEventListener("click", () => void startInDir(cwd, launchAgent.value));
 				resultsContainer.appendChild(row);
 			}
 		};
@@ -669,17 +723,17 @@ export function createSidebar({
 			e.preventDefault();
 			const val = pathInput.value.trim();
 			if (!val) {
-				void startInDir("/root");
+				void startInDir("/root", launchAgent.value);
 				return;
 			}
 			// Use first visible result if available
 			if (currentResults.length > 0) {
-				void startInDir(currentResults[0]);
+				void startInDir(currentResults[0], launchAgent.value);
 				return;
 			}
 			const looksLikePath = val.startsWith("/") || val.startsWith("~/") || val === "~" || val.startsWith("./") || val.startsWith("../");
 			if (looksLikePath) {
-				void startInDir(val);
+				void startInDir(val, launchAgent.value);
 				return;
 			}
 			// Last resort: fire a remote search and use first result
@@ -687,13 +741,13 @@ export function createSidebar({
 				const data = await api.getJson(`/api/dirs/search?q=${encodeURIComponent(val)}`);
 				const dirs = Array.isArray(data.dirs) ? data.dirs : [];
 				if (dirs[0]) {
-					void startInDir(dirs[0]);
+					void startInDir(dirs[0], launchAgent.value);
 					return;
 				}
 			} catch {
 				// fall through to default cwd
 			}
-			void startInDir("/root");
+			void startInDir("/root", launchAgent.value);
 		});
 		inputRow.appendChild(pathInput);
 		sessionsList.appendChild(inputRow);
@@ -709,17 +763,17 @@ export function createSidebar({
 		setTimeout(() => pathInput.focus(), 0);
 	}
 
-	async function startInDir(cwd) {
+	async function startInDir(cwd, launchAgent = "") {
 		const trimmedCwd = cwd.trim();
 		try {
 			const gitCheck = await api.getJson(`/api/is-git-repo?path=${encodeURIComponent(trimmedCwd)}`);
 			if (gitCheck?.isGitRepo) {
-				void showWorktreeChoice(trimmedCwd);
+				void showWorktreeChoice(trimmedCwd, launchAgent);
 				return;
 			}
 		} catch { /* non-git, proceed normally */ }
 		try {
-			const result = await api.postJson("/api/sessions", { clientId, cwd: trimmedCwd });
+			const result = await api.postJson("/api/sessions", { clientId, cwd: trimmedCwd, forceNew: Boolean(launchAgent), startAgent: launchAgent });
 			viewMode = "sessions";
 			onSessionIdSelected(result.sessionId);
 			setOpen(false);
@@ -731,9 +785,9 @@ export function createSidebar({
 		}
 	}
 
-	async function startNormalSession(cwd) {
+	async function startNormalSession(cwd, launchAgent = "") {
 		try {
-			const result = await api.postJson("/api/sessions", { clientId, cwd: cwd.trim(), forceNew: true });
+			const result = await api.postJson("/api/sessions", { clientId, cwd: cwd.trim(), forceNew: true, startAgent: launchAgent });
 			viewMode = "sessions";
 			onSessionIdSelected(result.sessionId);
 			setOpen(false);
@@ -745,20 +799,20 @@ export function createSidebar({
 		}
 	}
 
-	async function showNewSessionInFolder(cwd) {
+	async function showNewSessionInFolder(cwd, launchAgent = "") {
 		// Check if it's a git repo to offer worktree option
 		try {
 			const gitCheck = await api.getJson(`/api/is-git-repo?path=${encodeURIComponent(cwd)}`);
 			if (gitCheck?.isGitRepo) {
-				void showWorktreeChoice(cwd);
+				void showWorktreeChoice(cwd, launchAgent);
 				return;
 			}
 		} catch { /* non-git, proceed with normal session */ }
 		// Not a git repo, just create normal session
-		void startNormalSession(cwd);
+		void startNormalSession(cwd, launchAgent);
 	}
 
-	function showWorktreeChoice(cwd) {
+	function showWorktreeChoice(cwd, launchAgent = "") {
 		viewMode = "picker";
 		sessionsList.innerHTML = "";
 		if (sidebarLabel) sidebarLabel.textContent = "Session Type";
@@ -766,7 +820,7 @@ export function createSidebar({
 		const backBtn = document.createElement("div");
 		backBtn.className = "si si-new";
 		backBtn.innerHTML = `<div class="si-name">← Back</div>`;
-		backBtn.addEventListener("click", () => void showNewSessionPicker());
+		backBtn.addEventListener("click", () => void showNewSessionPicker({ initialAgent: launchAgent }));
 		sessionsList.appendChild(backBtn);
 
 		const info = document.createElement("div");
@@ -780,17 +834,17 @@ export function createSidebar({
 		const normalBtn = document.createElement("div");
 		normalBtn.className = "si si-new";
 		normalBtn.innerHTML = `<div class="si-name">Normal Session</div><div class="si-meta">Open directly in the repo root</div>`;
-		normalBtn.addEventListener("click", () => void startNormalSession(cwd));
+		normalBtn.addEventListener("click", () => void startNormalSession(cwd, launchAgent));
 		sessionsList.appendChild(normalBtn);
 
 		const wtBtn = document.createElement("div");
 		wtBtn.className = "si si-new";
 		wtBtn.innerHTML = `<div class="si-name">🌿 New Worktree</div><div class="si-meta">Independent branch + isolated copy</div>`;
-		wtBtn.addEventListener("click", () => void showWorktreeForm(cwd));
+		wtBtn.addEventListener("click", () => void showWorktreeForm(cwd, false, launchAgent));
 		sessionsList.appendChild(wtBtn);
 	}
 
-	async function showWorktreeForm(cwd, skipBackButton = false) {
+	async function showWorktreeForm(cwd, skipBackButton = false, launchAgent = "") {
 		viewMode = "picker";
 		sessionsList.innerHTML = "";
 		if (sidebarLabel) sidebarLabel.textContent = "New Worktree";
@@ -799,7 +853,7 @@ export function createSidebar({
 			const backBtn = document.createElement("div");
 			backBtn.className = "si si-new";
 			backBtn.innerHTML = `<div class="si-name">← Back</div>`;
-			backBtn.addEventListener("click", () => void showWorktreeChoice(cwd));
+			backBtn.addEventListener("click", () => void showWorktreeChoice(cwd, launchAgent));
 			sessionsList.appendChild(backBtn);
 		}
 
@@ -855,6 +909,7 @@ export function createSidebar({
 					name,
 					baseBranch: branchSelect.value === "HEAD" ? undefined : branchSelect.value,
 					clientId,
+					startAgent: launchAgent,
 				});
 				viewMode = "sessions";
 				onSessionIdSelected(result.sessionId);
@@ -936,7 +991,7 @@ export function createSidebar({
 		}
 	}
 
-	// Hide header buttons — replaced by inline +Session/+Project row
+	// Hide header buttons — replaced by inline session creation controls
 	if (btnSidebarLeft) btnSidebarLeft.style.display = "none";
 	if (btnSidebarRight) btnSidebarRight.style.display = "none";
 
@@ -975,3 +1030,7 @@ export function createSidebar({
 		},
 	};
 }
+
+export const __test = {
+	resolveProjectDialogBackHandler,
+};

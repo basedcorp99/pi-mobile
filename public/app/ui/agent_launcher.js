@@ -1,39 +1,192 @@
+const RECENT_AGENT_KEY = "piWebRecentAgent";
+const RECENT_AGENT_CWD_KEY_PREFIX = "piWebRecentAgentCwd:";
+
+function safeLocalStorageGet(key) {
+	try {
+		return localStorage.getItem(key);
+	} catch {
+		return null;
+	}
+}
+
+function safeLocalStorageSet(key, value) {
+	try {
+		localStorage.setItem(key, value);
+	} catch {
+		// ignore
+	}
+}
+
 function sortByLabel(items) {
 	return [...items].sort((a, b) => String(a.label || a.name || "").localeCompare(String(b.label || b.name || "")));
+}
+
+function displayScopeRank(scope) {
+	if (scope === "user") return 0;
+	if (scope === "project") return 1;
+	if (scope === "builtin") return 2;
+	return 3;
+}
+
+function executionScopeRank(scope) {
+	if (scope === "project") return 2;
+	if (scope === "user") return 1;
+	if (scope === "builtin") return 0;
+	return -1;
+}
+
+function makeAgentKey(agentOrScope, name) {
+	if (agentOrScope && typeof agentOrScope === "object") {
+		return `${agentOrScope.scope || "builtin"}:${agentOrScope.name || ""}`;
+	}
+	return `${agentOrScope || "builtin"}:${name || ""}`;
+}
+
+function findAgentByKey(agents = [], key = "") {
+	return agents.find((agent) => makeAgentKey(agent) === key) || null;
+}
+
+// The launcher intentionally shows only effective runtime choices.
+// Same-named lower-priority agents are hidden here because /run resolves by
+// name using project > user > builtin precedence.
+function buildEffectiveAgents(items = []) {
+	const byName = new Map();
+	for (const agent of items) {
+		const existing = byName.get(agent.name);
+		if (!existing || executionScopeRank(agent.scope) > executionScopeRank(existing.scope)) {
+			byName.set(agent.name, agent);
+		}
+	}
+	return [...byName.values()];
+}
+
+function scopeGroupLabel(scope) {
+	if (scope === "user") return "Custom (~/.pi)";
+	if (scope === "project") return "Project";
+	if (scope === "builtin") return "Built-in";
+	return "Other";
+}
+
+function scopeDescription(scope) {
+	if (scope === "user") return "Custom agent from ~/.pi";
+	if (scope === "project") return "Project agent";
+	if (scope === "builtin") return "Built-in agent";
+	return "Agent";
+}
+
+function normalizeCwdForStorage(cwd) {
+	const raw = typeof cwd === "string" ? cwd.trim() : "";
+	if (!raw) return "";
+	const normalized = raw.length > 1 ? raw.replace(/\/+$/, "") : raw;
+	return normalized || raw;
+}
+
+function resolveRecentAgentKey(agents = [], recentKey = "") {
+	const exact = String(recentKey || "").trim();
+	if (!exact) return "";
+	if (agents.some((agent) => makeAgentKey(agent) === exact)) return exact;
+	const sep = exact.indexOf(":");
+	const fallbackName = sep === -1 ? exact : exact.slice(sep + 1);
+	if (!fallbackName) return "";
+	const byName = agents.find((agent) => String(agent?.name || "") === fallbackName);
+	return byName ? makeAgentKey(byName) : "";
+}
+
+function buildRecentAgentCwdStorageKey(cwd) {
+	const normalized = normalizeCwdForStorage(cwd);
+	return normalized ? `${RECENT_AGENT_CWD_KEY_PREFIX}${normalized}` : "";
+}
+
+function getRecentAgentKey(agents = [], cwd = "") {
+	const cwdKey = buildRecentAgentCwdStorageKey(cwd);
+	const cwdRecent = cwdKey ? resolveRecentAgentKey(agents, safeLocalStorageGet(cwdKey)) : "";
+	if (cwdRecent) return cwdRecent;
+	const recent = resolveRecentAgentKey(agents, safeLocalStorageGet(RECENT_AGENT_KEY));
+	if (recent) return recent;
+	return "";
+}
+
+function sortAgents(items, cwd = "") {
+	const recent = getRecentAgentKey(items, cwd);
+	return [...items].sort((a, b) => {
+		const aRecent = makeAgentKey(a) === recent;
+		const bRecent = makeAgentKey(b) === recent;
+		if (aRecent !== bRecent) return aRecent ? -1 : 1;
+		const rankDiff = displayScopeRank(a.scope) - displayScopeRank(b.scope);
+		if (rankDiff !== 0) return rankDiff;
+		return String(a.label || a.name || "").localeCompare(String(b.label || b.name || ""));
+	});
+}
+
+function setRecentAgentKey(key, agents = [], cwd = "") {
+	if (typeof key !== "string" || key.length === 0) return;
+	const agent = findAgentByKey(agents, key);
+	const scope = agent?.scope || String(key).split(":", 1)[0] || "";
+	const cwdKey = buildRecentAgentCwdStorageKey(cwd);
+	if (cwdKey) safeLocalStorageSet(cwdKey, key);
+	if (scope !== "project") safeLocalStorageSet(RECENT_AGENT_KEY, key);
+}
+
+function getDefaultAgentKey(agents = [], cwd = "") {
+	const recent = getRecentAgentKey(agents, cwd);
+	if (recent) return recent;
+	return agents[0] ? makeAgentKey(agents[0]) : "";
+}
+
+function buildAgentRequestUrl(cwd) {
+	return cwd ? `/api/agents?cwd=${encodeURIComponent(cwd)}` : "/api/agents";
 }
 
 function quoteArg(text) {
 	return JSON.stringify(String(text || ""));
 }
 
-function agentToken(step) {
-	const name = String(step?.agent || "").trim();
+function agentToken(step, agents = []) {
+	const agent = findAgentByKey(agents, String(step?.agent || ""));
+	const name = String(agent?.name || "").trim();
 	if (!name) return "";
 	const inline = [];
 	if (step?.model) inline.push(`model=${step.model}`);
 	return inline.length > 0 ? `${name}[${inline.join(",")}]` : name;
 }
 
-function makeStep(agents = []) {
+function makeStep(agents = [], cwd = "") {
 	return {
-		agent: agents[0]?.name || "",
+		agent: getDefaultAgentKey(agents, cwd),
 		model: "", // empty = agent default
 		task: "",
 	};
 }
 
-function commandForMode(mode, steps, flags) {
-	const enabledSteps = (steps || []).filter((step) => String(step?.agent || "").trim() && String(step?.task || "").trim());
+function isRunnableStep(step, agents = []) {
+	return Boolean(findAgentByKey(agents, String(step?.agent || "")) && String(step?.task || "").trim());
+}
+
+function getRecentAgentKeyForSubmit(mode, steps, lastTouchedAgentKey, agents = []) {
+	if (mode === "single") {
+		return isRunnableStep(steps?.[0], agents) ? String(steps[0]?.agent || "") : "";
+	}
+	const touchedIsRunnable = Boolean(
+		lastTouchedAgentKey
+		&& findAgentByKey(agents, String(lastTouchedAgentKey || ""))
+		&& (steps || []).some((step) => String(step?.agent || "") === String(lastTouchedAgentKey || "") && isRunnableStep(step, agents)),
+	);
+	if (touchedIsRunnable) return String(lastTouchedAgentKey || "");
+	return String((steps || []).find((step) => isRunnableStep(step, agents))?.agent || "");
+}
+
+function commandForMode(mode, steps, flags, agents = []) {
+	const enabledSteps = (steps || []).filter((step) => isRunnableStep(step, agents));
 	if (enabledSteps.length === 0) return "";
 	if (mode === "single") {
 		const step = enabledSteps[0];
-		let cmd = `/run ${agentToken(step)} ${quoteArg(step.task.trim())}`;
+		let cmd = `/run ${agentToken(step, agents)} ${quoteArg(step.task.trim())}`;
 		if (flags?.fork) cmd += " --fork";
 		if (flags?.bg) cmd += " --bg";
 		return cmd;
 	}
 	const slash = mode === "parallel" ? "/parallel" : "/chain";
-	let cmd = `${slash} ${enabledSteps.map((step) => `${agentToken(step)} ${quoteArg(step.task.trim())}`).join(" -> ")}`;
+	let cmd = `${slash} ${enabledSteps.map((step) => `${agentToken(step, agents)} ${quoteArg(step.task.trim())}`).join(" -> ")}`;
 	if (flags?.fork) cmd += " --fork";
 	if (flags?.bg) cmd += " --bg";
 	return cmd;
@@ -80,7 +233,7 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit, get
 		hdr.className = "menu-hdr";
 		const title = document.createElement("div");
 		title.className = "menu-title";
-		title.textContent = "Subagents";
+		title.textContent = "Agents";
 		const closeBtn = document.createElement("button");
 		closeBtn.className = "menu-mini";
 		closeBtn.textContent = "Close";
@@ -97,24 +250,27 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit, get
 
 		let agentData;
 		let modelData;
+		const activeCwd = getActiveState?.()?.cwd || "";
+		const agentUrl = buildAgentRequestUrl(activeCwd);
 		try {
 			[agentData, modelData] = await Promise.all([
-				api.getJson("/api/agents"),
+				api.getJson(agentUrl),
 				api.getJson("/api/models"),
 			]);
 		} catch {
-			body.textContent = "Failed to load subagent data.";
+			body.textContent = "Failed to load agent data.";
 			return;
 		}
 
-		// Agents now include .model (agent default model or null)
-		const agents = sortByLabel((Array.isArray(agentData?.agents) ? agentData.agents : []).map((agent) => ({
+		const allAgents = (Array.isArray(agentData?.agents) ? agentData.agents : []).map((agent) => ({
 			name: agent.name,
 			label: agent.name,
 			description: agent.description || "",
 			scope: agent.scope || "builtin",
 			model: agent.model || null,
-		})));
+		}));
+		const agents = sortAgents(buildEffectiveAgents(allAgents), activeCwd);
+		const shadowedCount = Math.max(0, allAgents.length - agents.length);
 		const models = sortByLabel((Array.isArray(modelData?.models) ? modelData.models : []).map((model) => ({
 			value: `${model.provider}/${model.id}`,
 			label: model.name || model.id,
@@ -122,43 +278,82 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit, get
 		})));
 
 		if (agents.length === 0) {
-			body.textContent = "No subagents found.";
+			body.textContent = activeCwd
+				? "No agents found for this session directory. Project agents depend on the current cwd."
+				: "No agents found.";
 			return;
 		}
 
 		let mode = "single";
-		let steps = [makeStep(agents)];
+		let steps = [makeStep(agents, activeCwd)];
 		let flags = { fork: false, bg: false };
+		let lastTouchedAgentKey = getDefaultAgentKey(agents, activeCwd);
+
+		const normalizeStep = (step) => ({
+			agent: findAgentByKey(agents, String(step?.agent || "")) ? String(step.agent || "") : getDefaultAgentKey(agents, activeCwd),
+			model: String(step?.model || ""),
+			task: String(step?.task || ""),
+		});
 
 		const ensureStepsForMode = () => {
 			if (mode === "single") {
-				steps = [steps[0] || makeStep(agents)];
+				steps = [normalizeStep(steps[0] || makeStep(agents, activeCwd))];
 				return;
 			}
-			while (steps.length < 2) steps.push(makeStep(agents));
+			steps = steps.map((step) => normalizeStep(step));
+			while (steps.length < 2) steps.push(makeStep(agents, activeCwd));
 		};
 
 		// --- Build the native <select> for picking an agent ---
 		const buildAgentSelect = (value, onChange) => {
 			const select = document.createElement("select");
 			select.className = "agent-launcher-select";
-			for (const agent of agents) {
-				const option = document.createElement("option");
-				option.value = agent.name;
-				option.textContent = `${agent.name} · ${agent.scope}`;
-				if (agent.name === value) option.selected = true;
-				select.appendChild(option);
+			const recent = getRecentAgentKey(agents, activeCwd);
+			const selectedValue = findAgentByKey(agents, value) ? value : getDefaultAgentKey(agents, activeCwd);
+			const knownScopes = ["user", "project", "builtin"];
+			for (const scope of knownScopes) {
+				const scopedAgents = agents.filter((agent) => agent.scope === scope);
+				if (scopedAgents.length === 0) continue;
+				const group = document.createElement("optgroup");
+				group.label = scopeGroupLabel(scope);
+				for (const agent of scopedAgents) {
+					const key = makeAgentKey(agent);
+					const option = document.createElement("option");
+					option.value = key;
+					option.textContent = key === recent ? `${agent.name} · recent` : agent.name;
+					if (key === selectedValue) option.selected = true;
+					group.appendChild(option);
+				}
+				select.appendChild(group);
 			}
-			select.addEventListener("change", () => onChange(select.value));
+			const otherAgents = agents.filter((agent) => !knownScopes.includes(agent.scope));
+			if (otherAgents.length > 0) {
+				const group = document.createElement("optgroup");
+				group.label = scopeGroupLabel("other");
+				for (const agent of otherAgents) {
+					const key = makeAgentKey(agent);
+					const option = document.createElement("option");
+					option.value = key;
+					option.textContent = key === recent ? `${agent.name} · recent` : agent.name;
+					if (key === selectedValue) option.selected = true;
+					group.appendChild(option);
+				}
+				select.appendChild(group);
+			}
+			select.addEventListener("change", () => {
+				lastTouchedAgentKey = select.value;
+				setRecentAgentKey(select.value, agents, activeCwd);
+				onChange(select.value);
+			});
 			return select;
 		};
 
 		// --- Build the native <select> for model with Default + Session + all models ---
-		const buildModelSelect = (agentName, value, onChange) => {
+		const buildModelSelect = (agentKey, value, onChange) => {
 			const select = document.createElement("select");
 			select.className = "agent-launcher-select";
 
-			const agentInfo = agents.find((a) => a.name === agentName);
+			const agentInfo = findAgentByKey(agents, agentKey);
 			const activeModel = getActiveState?.()?.model || null;
 			const fallbackModel = activeModel ? `${activeModel.provider}/${activeModel.id}` : null;
 			const defaultModelLabel = agentInfo?.model
@@ -211,8 +406,23 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit, get
 
 			const intro = document.createElement("div");
 			intro.className = "agent-launcher-intro";
-			intro.textContent = "Run one subagent, or build a chain / parallel run with per-step model overrides.";
+			intro.textContent = agents.some((agent) => agent.scope === "user" || agent.scope === "project")
+				? "Run one agent, or build a chain / parallel run. Custom agents are easy to reach without taking over the main flow."
+				: "Run one agent, or build a chain / parallel run with per-step model overrides.";
 			body.appendChild(intro);
+
+			const notes = [];
+			if (activeCwd) notes.push(`Project agents resolve from ${activeCwd}.`);
+			else notes.push("Project agents depend on the current session directory.");
+			if (shadowedCount > 0) {
+				notes.push(`${shadowedCount} same-named agent${shadowedCount === 1 ? " is" : "s are"} hidden because higher-priority scopes override them at run time.`);
+			}
+			if (notes.length > 0) {
+				const note = document.createElement("div");
+				note.className = "agent-launcher-note";
+				note.textContent = notes.join(" ");
+				body.appendChild(note);
+			}
 
 			const tabs = document.createElement("div");
 			tabs.className = "agent-launcher-tabs";
@@ -303,8 +513,9 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit, get
 				const meta = document.createElement("div");
 				meta.className = "agent-launcher-meta";
 				const updateMeta = () => {
-					const agentInfo = agents.find((item) => item.name === step.agent);
+					const agentInfo = findAgentByKey(agents, step.agent);
 					const lines = [];
+					if (agentInfo) lines.push(scopeDescription(agentInfo.scope));
 					if (agentInfo?.description) lines.push(agentInfo.description);
 					if (step.model) {
 						const m = models.find((m) => m.value === step.model);
@@ -325,7 +536,7 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit, get
 				const taskInput = document.createElement("textarea");
 				taskInput.className = "agent-launcher-textarea";
 				taskInput.rows = 3;
-				taskInput.placeholder = mode === "single" ? "What should this subagent do?" : "What should this step do?";
+				taskInput.placeholder = mode === "single" ? "What should this agent do?" : "What should this step do?";
 				taskInput.value = step.task;
 				taskInput.addEventListener("input", () => {
 					step.task = taskInput.value;
@@ -346,7 +557,7 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit, get
 				addRow.className = "menu-mini agent-launcher-add";
 				addRow.textContent = mode === "parallel" ? "+ Add slot" : "+ Add step";
 				addRow.addEventListener("click", () => {
-					steps.push(makeStep(agents));
+					steps.push(makeStep(agents, activeCwd));
 					render();
 				});
 				body.appendChild(addRow);
@@ -376,7 +587,7 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit, get
 			const preview = document.createElement("div");
 			preview.className = "agent-launcher-preview";
 			const updatePreview = () => {
-				const cmd = commandForMode(mode, steps, flags);
+				const cmd = commandForMode(mode, steps, flags, agents);
 				preview.textContent = cmd || "Fill in at least one agent and task.";
 			};
 			updatePreview();
@@ -392,10 +603,12 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit, get
 			const run = document.createElement("button");
 			run.type = "button";
 			run.className = "menu-mini agent-launcher-run";
-			run.textContent = mode === "single" ? "Run subagent" : mode === "parallel" ? "Run parallel" : "Run chain";
+			run.textContent = mode === "single" ? "Run agent" : mode === "parallel" ? "Run parallel" : "Run chain";
 			run.addEventListener("click", () => {
-				const command = commandForMode(mode, steps, flags);
+				const command = commandForMode(mode, steps, flags, agents);
 				if (!command) return;
+				const recentAgent = getRecentAgentKeyForSubmit(mode, steps, lastTouchedAgentKey, agents);
+				if (recentAgent) setRecentAgentKey(recentAgent, agents, activeCwd);
 				close();
 				if (typeof onSubmit === "function") onSubmit(command);
 			});
@@ -409,3 +622,19 @@ export function createAgentLauncher({ menuOverlay, menuPanel, api, onSubmit, get
 
 	return { show, close };
 }
+
+export const __test = {
+	makeAgentKey,
+	findAgentByKey,
+	buildEffectiveAgents,
+	normalizeCwdForStorage,
+	resolveRecentAgentKey,
+	buildRecentAgentCwdStorageKey,
+	getRecentAgentKey,
+	sortAgents,
+	setRecentAgentKey,
+	getDefaultAgentKey,
+	getRecentAgentKeyForSubmit,
+	buildAgentRequestUrl,
+	commandForMode,
+};

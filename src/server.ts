@@ -877,7 +877,13 @@ Bun.serve({
 		}
 
 		if (req.method === "POST" && url.pathname === "/api/worktree/create") {
-			const raw = (await requireJsonBody(req)) as { repoPath?: string; name?: string; baseBranch?: string; clientId?: string };
+			const raw = (await requireJsonBody(req)) as {
+				repoPath?: string;
+				name?: string;
+				baseBranch?: string;
+				clientId?: string;
+				startAgent?: string;
+			};
 			if (!raw?.repoPath || typeof raw.repoPath !== "string") return errorResponse("Missing repoPath", 400);
 			if (!raw?.name || typeof raw.name !== "string") return errorResponse("Missing name", 400);
 			if (!raw?.clientId || typeof raw.clientId !== "string") return errorResponse("Missing clientId", 400);
@@ -887,6 +893,7 @@ Bun.serve({
 					name: raw.name,
 					baseBranch: typeof raw.baseBranch === "string" ? raw.baseBranch : undefined,
 					clientId: raw.clientId,
+					startAgent: typeof raw.startAgent === "string" ? raw.startAgent : undefined,
 				});
 				return json(result, 200);
 			} catch (error) {
@@ -960,8 +967,9 @@ Bun.serve({
 		const { sessionId, action } = sessionRoute;
 
 		if (req.method === "GET" && action === "state") {
+			const includeFullHistory = url.searchParams.get("fullHistory") === "1" || url.searchParams.get("full") === "1";
 			try {
-				const state: ApiSessionState = runtime.getSessionState(sessionId);
+				const state: ApiSessionState = runtime.getSessionState(sessionId, includeFullHistory);
 				return json(state, 200);
 			} catch {
 				return errorResponse("Session not running", 404);
@@ -970,9 +978,10 @@ Bun.serve({
 
 		if (req.method === "GET" && action === "events") {
 			const clientId = url.searchParams.get("clientId")?.trim() || randomUUID();
+			const includeFullHistory = url.searchParams.get("fullHistory") === "1" || url.searchParams.get("full") === "1";
 			let state: ApiSessionState;
 			try {
-				state = runtime.getSessionState(sessionId);
+				state = runtime.getSessionState(sessionId, includeFullHistory);
 			} catch {
 				return errorResponse("Session not running", 404);
 			}

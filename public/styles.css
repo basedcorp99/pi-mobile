@@ -472,6 +472,11 @@
       font-size: 13px;
       line-height: 1.5;
     }
+    .agent-launcher-note {
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
     .agent-launcher-tabs {
       display: flex;
       flex-wrap: wrap;
@@ -1678,6 +1683,7 @@
     /* actions tray below input */
     .composer-actions {
       display: flex;
+      flex-wrap: wrap;
       gap: 4px;
       padding: 6px 0 0 44px;
       animation: composerTrayIn .2s cubic-bezier(0.4, 0, 0.2, 1);

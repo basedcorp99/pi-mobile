@@ -69,6 +69,8 @@ const btnAbortTxt = btnAbort?.querySelector?.(".txt") || null;
 const btnCompactTxt = btnCompact?.querySelector?.(".txt") || null;
 const btnReleaseTxt = btnRelease?.querySelector?.(".txt") || null;
 const btnAttach = document.getElementById("btn-attach");
+const LOAD_FULL_SESSION_HISTORY = true;
+
 const btnHistory = document.getElementById("btn-history");
 const btnVoice = document.getElementById("btn-voice");
 const btnAttachClear = document.getElementById("btn-attach-clear");
@@ -800,6 +802,7 @@ const sessionCtrl = createSessionController({
 	onSessionEnded: (sessionId) => {
 		askDialog?.close?.(sessionId, false);
 	},
+	loadFullHistory: LOAD_FULL_SESSION_HISTORY,
 	onUserTurn: (sessionId) => {
 		// Mark session as needing attention when assistant finishes responding
 		if (sessionId !== sessionCtrl.getActiveSessionId?.()) {
@@ -829,6 +832,7 @@ sidebarCtrl = createSidebar({
 		sessionCtrl.openSessionId(sessionId);
 		clearAttachments();
 		updateControls();
+
 		// Clear attention marker when user opens the session
 		if (sessionId) sidebarCtrl?.clearAttention?.(sessionId);
 	},

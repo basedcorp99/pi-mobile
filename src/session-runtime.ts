@@ -6,6 +6,13 @@ import {
 	ModelRegistry,
 	SessionManager,
 	SettingsManager,
+	readTool,
+	bashTool,
+	editTool,
+	writeTool,
+	grepTool,
+	findTool,
+	lsTool,
 	type AgentSession,
 	type AgentSessionEvent,
 } from "@mariozechner/pi-coding-agent";
@@ -14,6 +21,9 @@ import { mkdirSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { type Model, type Api } from "@mariozechner/pi-ai";
+import type { AgentMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
+import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type {
@@ -61,35 +71,224 @@ If the user explicitly asks you to do any of the above, comply — but reconfirm
 When your work is done, just commit to your branch. Merging into main is handled externally.
 `.trim();
 
-function buildWorktreeResourceLoader(cwd: string): DefaultResourceLoader | null {
-	const info = parseWorktreeInfo(cwd);
-	if (!info) return null;
+let cachedNpmRoot: string | null | undefined;
+let subagentManagementModulePromise: Promise<any | null> | null = null;
+let subagentSkillsModulePromise: Promise<any | null> | null = null;
 
+interface ResolvedStartAgentConfig {
+	name: string;
+	systemPrompt?: string;
+	tools?: unknown[];
+	model?: Model<Api>;
+	thinkingLevel?: ThinkingLevel;
+	extensions?: string[];
+}
+
+function getGlobalNpmRoot(): string | null {
+	if (cachedNpmRoot === undefined) {
+		try {
+			cachedNpmRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf-8", timeout: 3000 }).trim();
+		} catch {
+			cachedNpmRoot = null;
+		}
+	}
+	return cachedNpmRoot;
+}
+
+function normalizeThinkingLevel(value: unknown): ThinkingLevel | undefined {
+	if (typeof value !== "string") return undefined;
+	const normalized = value.trim().toLowerCase();
+	return normalized && ["off", "minimal", "low", "medium", "high", "xhigh"].includes(normalized)
+		? (normalized as ThinkingLevel)
+		: undefined;
+}
+
+function resolveModelById(modelIdOrScope: string, modelRegistry: ModelRegistry): { model?: Model<Api>; thinkingLevel?: ThinkingLevel } {
+	const trimmed = modelIdOrScope.trim();
+	if (!trimmed) return {};
+
+	if (trimmed.includes("/") || trimmed.includes(":")) {
+		const separator = trimmed.includes("/") ? "/" : ":";
+		const [provider, modelId] = trimmed.split(separator, 2);
+		if (!provider || !modelId) return {};
+		const match = modelRegistry.find(provider, modelId);
+		if (!match) return {};
+		const typedMatch = match as Model<Api> & { thinkingLevel?: ThinkingLevel };
+		return { model: match, thinkingLevel: typedMatch.thinkingLevel };
+	}
+
+	const exact = modelRegistry.getAvailable().find((m) => m.id === trimmed);
+	if (exact) {
+		const typedExact = exact as Model<Api> & { thinkingLevel?: ThinkingLevel };
+		return { model: exact, thinkingLevel: typedExact.thinkingLevel };
+	}
+	return {};
+}
+
+async function loadSubagentManagementModule() {
+	if (subagentManagementModulePromise !== null) return subagentManagementModulePromise;
+	const root = getGlobalNpmRoot();
+	if (!root) {
+		subagentManagementModulePromise = Promise.resolve(null);
+		return subagentManagementModulePromise;
+	}
+	subagentManagementModulePromise = import(join(root, "pi-subagents", "agent-management.ts")).then(
+		(mod) => (typeof mod.findAgents === "function" ? mod : null),
+		() => null,
+	);
+	return subagentManagementModulePromise;
+}
+
+async function loadSubagentSkillsModule() {
+	if (subagentSkillsModulePromise !== null) return subagentSkillsModulePromise;
+	const root = getGlobalNpmRoot();
+	if (!root) {
+		subagentSkillsModulePromise = Promise.resolve(null);
+		return subagentSkillsModulePromise;
+	}
+	subagentSkillsModulePromise = import(join(root, "pi-subagents", "skills.ts")).then(
+		(mod) =>
+			typeof mod.resolveSkills === "function" && typeof mod.buildSkillInjection === "function"
+				? mod
+				: null,
+		() => null,
+	);
+	return subagentSkillsModulePromise;
+}
+
+async function resolveStartAgentConfig(
+	cwd: string,
+	startAgent: string | undefined,
+	modelRegistry: ModelRegistry,
+): Promise<ResolvedStartAgentConfig | null> {
+	const trimmed = typeof startAgent === "string" ? startAgent.trim() : "";
+	if (!trimmed) return null;
+
+	const management = await loadSubagentManagementModule();
+	if (!management) throw new Error("start agent support is unavailable");
+
+	const candidates = management.findAgents(trimmed, cwd, "both");
+	if (!Array.isArray(candidates) || candidates.length === 0) {
+		throw new Error(`Unknown start agent: ${trimmed}`);
+	}
+
+	const selected = candidates[0]!;
+	const promptParts: string[] = [];
+	if (typeof selected.systemPrompt === "string" && selected.systemPrompt.trim()) {
+		promptParts.push(selected.systemPrompt.trim());
+	}
+	if (Array.isArray(selected.skills) && selected.skills.length > 0) {
+		const skillsModule = await loadSubagentSkillsModule();
+		if (!skillsModule) throw new Error(`Unable to resolve skills for start agent: ${selected.name}`);
+		const result = skillsModule.resolveSkills(selected.skills, cwd);
+		if (result.missing.length > 0) {
+			throw new Error(`Unknown skills for start agent '${selected.name}': ${result.missing.join(", ")}`);
+		}
+		if (result.resolved.length > 0) {
+			const injected = skillsModule.buildSkillInjection(result.resolved);
+			if (injected) promptParts.push(injected);
+		}
+	}
+
+	let tools: unknown[] | undefined;
+	if (Array.isArray(selected.tools) && selected.tools.length > 0) {
+		const availableTools: Record<string, unknown> = {
+				read: readTool,
+				bash: bashTool,
+				edit: editTool,
+				write: writeTool,
+				grep: grepTool,
+				find: findTool,
+				ls: lsTool,
+		};
+		const mapped = selected.tools
+			.map((name: string) => availableTools[name])
+			.filter(Boolean);
+		if (mapped.length > 0) {
+			tools = mapped;
+		}
+	}
+
+	let model: Model<Api> | undefined;
+	let thinkingLevel: ThinkingLevel | undefined;
+	if (typeof selected.model === "string" && selected.model.trim()) {
+		const resolvedModel = resolveModelById(selected.model, modelRegistry);
+		if (!resolvedModel.model) {
+			throw new Error(`Unknown model for start agent '${selected.name}': ${selected.model}`);
+		}
+		model = resolvedModel.model;
+		thinkingLevel = resolvedModel.thinkingLevel;
+	}
+
+	const overrideThinking = normalizeThinkingLevel(selected.thinking);
+	if (overrideThinking) thinkingLevel = overrideThinking;
+
+	const extensions = Array.isArray(selected.extensions)
+		? selected.extensions.map((value: string) => value.trim()).filter(Boolean)
+		: undefined;
+
+	const systemPrompt = promptParts.length > 0 ? promptParts.join("\n\n") : undefined;
+	return {
+		name: selected.name,
+		systemPrompt: systemPrompt?.trim(),
+		tools,
+		model,
+		thinkingLevel,
+		extensions,
+	};
+}
+
+function buildSessionResourceLoader(cwd: string, startAgentConfig: ResolvedStartAgentConfig | null): DefaultResourceLoader {
+	const info = parseWorktreeInfo(cwd);
 	const agentDir = getAgentDir();
 	const settingsManager = SettingsManager.create(cwd, agentDir);
-	const loader = new DefaultResourceLoader({
+	const systemPromptOverride =
+		typeof startAgentConfig?.systemPrompt === "string" && startAgentConfig.systemPrompt.trim()
+			? (base: string | undefined) => {
+				const basePrompt = typeof base === "string" ? base.trim() : "";
+				return basePrompt ? `${basePrompt}\n\n${startAgentConfig.systemPrompt}` : startAgentConfig.systemPrompt;
+			}
+			: undefined;
+
+	const appendSystemPromptOverride = info
+		? (base: string[]) => [
+			...base,
+			`You are on branch \`${info.branch}\` in worktree \`${info.name}\` (repo root: \`${info.repoRoot}\`).\n\n${WORKTREE_GUARDRAILS}`,
+		]
+		: undefined;
+
+	return new DefaultResourceLoader({
 		cwd,
 		agentDir,
 		settingsManager,
-		appendSystemPromptOverride: (base: string[]) => [
-			...base,
-			`You are on branch \`${info.branch}\` in worktree \`${info.name}\` (repo root: \`${info.repoRoot}\`).\n\n${WORKTREE_GUARDRAILS}`,
-		],
+		...(systemPromptOverride ? { systemPromptOverride } : {}),
+		...(appendSystemPromptOverride ? { appendSystemPromptOverride } : {}),
+		...(startAgentConfig?.extensions && startAgentConfig.extensions.length > 0
+			? { additionalExtensionPaths: startAgentConfig.extensions }
+			: {}),
 	});
-	return loader;
 }
 
 async function createSessionWithWorktreeGuard(opts: {
 	cwd: string;
-	sessionManager: InstanceType<typeof SessionManager>;
+	sessionManager: SessionManager;
 	authStorage: AuthStorage;
 	modelRegistry: ModelRegistry;
+	startAgent?: string;
 }) {
-	const loader = buildWorktreeResourceLoader(opts.cwd);
+	const startAgentConfig = await resolveStartAgentConfig(opts.cwd, opts.startAgent, opts.modelRegistry);
+	const loader = buildSessionResourceLoader(opts.cwd, startAgentConfig);
 	if (loader) await loader.reload();
 	return createAgentSession({
-		...opts,
-		...(loader ? { resourceLoader: loader } : {}),
+		cwd: opts.cwd,
+		authStorage: opts.authStorage,
+		modelRegistry: opts.modelRegistry,
+		sessionManager: opts.sessionManager,
+		settingsManager: SettingsManager.create(opts.cwd, getAgentDir()),
+		resourceLoader: loader,
+		...(startAgentConfig?.tools ? ({ tools: startAgentConfig.tools } as { tools: any[] }) : {}),
+		...(startAgentConfig?.model ? { model: startAgentConfig.model } : {}),
+		...(startAgentConfig?.thinkingLevel ? { thinkingLevel: startAgentConfig.thinkingLevel } : {}),
 	});
 }
 
@@ -272,7 +471,39 @@ function safeCommandsSnapshot(session: AgentSession): ApiSessionCommand[] {
 	}
 }
 
-function buildState(session: AgentSession, cwd: string): ApiSessionState {
+function toMessageTimestamp(timestamp: unknown): number {
+	if (typeof timestamp === "number") return timestamp;
+	if (typeof timestamp !== "string") return Date.now();
+	const parsed = Date.parse(timestamp);
+	return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
+function buildMessagesFromSessionBranch(session: AgentSession): AgentMessage[] {
+	const messages: AgentMessage[] = [];
+	for (const entry of session.sessionManager.getBranch()) {
+		switch (entry.type) {
+			case "message":
+				messages.push(entry.message);
+				break;
+			case "custom_message": {
+				messages.push({
+					role: "custom",
+					customType: entry.customType,
+					content: entry.content,
+					display: entry.display,
+					details: entry.details,
+					timestamp: toMessageTimestamp(entry.timestamp),
+				});
+				break;
+			}
+			default:
+				break;
+		}
+	}
+	return messages;
+}
+
+function buildState(session: AgentSession, cwd: string, includeFullHistory = false): ApiSessionState {
 	return {
 		sessionId: session.sessionId,
 		cwd,
@@ -285,7 +516,7 @@ function buildState(session: AgentSession, cwd: string): ApiSessionState {
 		followUpMode: session.followUpMode,
 		stats: safeStatsSnapshot(session),
 		contextUsage: safeContextUsageSnapshot(session),
-		messages: session.messages,
+		messages: includeFullHistory ? buildMessagesFromSessionBranch(session) : session.messages,
 		commands: safeCommandsSnapshot(session),
 	};
 }
@@ -635,7 +866,6 @@ export class PiWebRuntime {
 			pasteToEditor() {},
 			setEditorText() {},
 			getEditorText: () => "",
-			async editor() { return undefined; },
 			setEditorComponent() {},
 			get theme(): any { return undefined; },
 			getAllThemes: () => [],
@@ -793,12 +1023,12 @@ export class PiWebRuntime {
 		}));
 	}
 
-	getSessionState(sessionId: string): ApiSessionState {
+	getSessionState(sessionId: string, includeFullHistory = false): ApiSessionState {
 		const runtime = this.runningById.get(sessionId);
 		if (!runtime) {
 			throw new Error("session_not_running");
 		}
-		return buildState(runtime.session, runtime.cwd);
+		return buildState(runtime.session, runtime.cwd, includeFullHistory);
 	}
 
 	getSessionRole(sessionId: string, clientId: string): { role: ClientRole; controllerClientId: string | null } {
@@ -852,6 +1082,7 @@ export class PiWebRuntime {
 				sessionManager,
 				authStorage: this.authStorage,
 				modelRegistry: this.modelRegistry,
+				startAgent: request.startAgent,
 			});
 			const runtime = this.registerSession(session, cwd, clientId);
 			await session.bindExtensions({ uiContext: this.createWebUIContext(runtime.session.sessionId) });
@@ -881,6 +1112,7 @@ export class PiWebRuntime {
 			sessionManager,
 			authStorage: this.authStorage,
 			modelRegistry: this.modelRegistry,
+			startAgent: request.startAgent,
 		});
 		const runtime = this.registerSession(session, cwd, clientId);
 		await session.bindExtensions({ uiContext: this.createWebUIContext(runtime.session.sessionId) });
@@ -1020,7 +1252,7 @@ export class PiWebRuntime {
 			const level = command.level.trim();
 			const allowed = ["off", "minimal", "low", "medium", "high", "xhigh"];
 			if (!allowed.includes(level)) throw new Error(`invalid_thinking_level: ${level}`);
-			runtime.session.setThinkingLevel(level as (typeof allowed)[number]);
+			runtime.session.setThinkingLevel(level as ThinkingLevel);
 			this.broadcast(sessionId, { type: "state_patch", patch: buildPatch(runtime.session) });
 			return;
 		}
@@ -1294,7 +1526,7 @@ export class PiWebRuntime {
 		return results;
 	}
 
-	async createWorktree(request: { repoPath: string; name: string; baseBranch?: string; clientId: string }): Promise<{ sessionId: string; worktreePath: string }> {
+	async createWorktree(request: { repoPath: string; name: string; baseBranch?: string; clientId: string; startAgent?: string }): Promise<{ sessionId: string; worktreePath: string }> {
 		const repoRoot = await this.getRepoRoot(request.repoPath);
 		if (!repoRoot) throw new Error("not_a_git_repo");
 
@@ -1324,7 +1556,7 @@ export class PiWebRuntime {
 			if (retry !== 0 && !existsSync(join(wtPath, ".git"))) throw new Error("failed_to_create_worktree");
 		}
 
-		const result = await this.startSession({ clientId: request.clientId, cwd: wtPath });
+		const result = await this.startSession({ clientId: request.clientId, cwd: wtPath, startAgent: request.startAgent });
 		return { sessionId: result.sessionId, worktreePath: wtPath };
 	}
 

@@ -18,6 +18,7 @@ export function createSessionController({
 	onReusePrompt,
 	onSessionEnded,
 	onUserTurn, // kept for direct notification when connected
+	loadFullHistory = false,
 }) {
 	let activeSessionId = null;
 	let activeState = null;
@@ -38,6 +39,7 @@ export function createSessionController({
 
 	let pendingPrompt = false;
 	let actionBusy = null;
+	const shouldUseFullHistory = Boolean(loadFullHistory);
 
 	const chatView = createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt });
 
@@ -80,7 +82,8 @@ export function createSessionController({
 	async function refreshState(options = {}) {
 		if (!activeSessionId) return false;
 		try {
-			const state = await api.getJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/state`);
+			const wantFull = options.fullHistory === true || (!Object.prototype.hasOwnProperty.call(options, "fullHistory") && shouldUseFullHistory && options.syncMessages !== false);
+			const state = await api.getJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/state${wantFull ? "?fullHistory=1" : ""}`);
 			activeState = state;
 			lastCliCommand = computeCliCommand(activeState) || lastCliCommand;
 			const shouldSyncMessages = options.syncMessages === true || (options.syncMessages !== false && !state?.isStreaming);
@@ -109,6 +112,7 @@ export function createSessionController({
 
 		const qs = new URLSearchParams({ clientId });
 		if (token) qs.set("token", token);
+		if (shouldUseFullHistory) qs.set("fullHistory", "1");
 
 		eventSource = new EventSource(`/api/sessions/${encodeURIComponent(sessionId)}/events?${qs.toString()}`);
 		lastEventTime = Date.now();

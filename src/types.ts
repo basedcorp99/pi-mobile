@@ -1,4 +1,5 @@
-import type { AgentMessage, AgentSessionEvent } from "@mariozechner/pi-coding-agent";
+import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 export type ClientRole = "controller" | "viewer";
 
@@ -67,6 +68,7 @@ export interface ApiCreateSessionRequest {
 	cwd?: string;
 	resumeSessionPath?: string;
 	forceNew?: boolean;
+	startAgent?: string;
 }
 
 export interface ApiCreateSessionResponse {

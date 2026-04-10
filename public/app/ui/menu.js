@@ -33,7 +33,7 @@ export function getCommandMenuEntries(commands) {
 		? commands.find((cmd) => cmd && typeof cmd === "object" && String(cmd.name || "").toLowerCase() === "review") || null
 		: null;
 	return [
-		{ key: "agents", title: "subagents", description: "Open the subagents modal", kind: "agents" },
+		{ key: "agents", title: "agents", description: "Open the agent launcher", kind: "agents" },
 		{
 			key: "review",
 			title: "review",
