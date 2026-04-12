@@ -2,7 +2,7 @@ import { safeRandomUUID } from "../core/uuid.js";
 import { safeStringify } from "../core/stringify.js";
 import { toolResultToText, toolResultExtractImages } from "../core/tool_format.js";
 import { renderMarkdown, renderMarkdownThrottled } from "../render/markdown.js";
-import { extractTextContent, parseAssistantContent } from "./content.js";
+import { extractTextContent, getAssistantTerminalNotice, parseAssistantContent } from "./content.js";
 import { parseSubagentSlashMessage } from "./subagent_slash.js";
 import { parseReviewSummaryMessage } from "./review_summary.js";
 import { createToolBoxManager } from "./tool_boxes.js";
@@ -162,6 +162,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 	let suppressAutoScroll = false;
 	let autoStickToBottom = true;
 	let internalScroll = false;
+	let transientNotices = [];
 
 	function isNearBottom(el, thresholdPx = 24) {
 		const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -181,6 +182,34 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 
 	function shouldAutoStick() {
 		return autoStickToBottom || isNearBottom(msgsEl);
+	}
+
+	function createNoticeBlock(text, kind = "info", options = {}) {
+		const block = document.createElement("div");
+		block.className = "assistant-block notice-block";
+		if (options.transient) block.dataset.transient = "true";
+		const el = document.createElement("div");
+		el.className = `notice-text ${kind}`;
+		el.textContent = text;
+		block.appendChild(el);
+		return block;
+	}
+
+	function appendInlineNotice(text, kind = "info") {
+		const value = typeof text === "string" ? text : String(text ?? "");
+		if (!value) return;
+		const stick = shouldAutoStick();
+		msgsEl.appendChild(createNoticeBlock(value, kind));
+		if (stick) scrollToBottom();
+	}
+
+	function renderTransientNotices() {
+		for (const node of msgsEl.querySelectorAll('.notice-block[data-transient="true"]')) {
+			node.remove();
+		}
+		for (const notice of transientNotices) {
+			msgsEl.appendChild(createNoticeBlock(notice.text, notice.kind, { transient: true }));
+		}
 	}
 
 	async function copyText(text) {
@@ -269,10 +298,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 	}
 
 	function clear(options = {}) {
-		// Save pinned notices unless explicitly discarding them
-		const savedNotices = options.discardNotices
-			? []
-			: Array.from(msgsEl.querySelectorAll(".notice-block")).map((n) => n.cloneNode(true));
+		if (options.discardNotices) transientNotices = [];
 		msgsEl.innerHTML = "";
 		const spacer = document.createElement("div");
 		spacer.className = "msgs-spacer";
@@ -289,8 +315,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 		subagentToolCallIds = new Set();
 		subagentToolCallArgs = new Map();
 		autoStickToBottom = true;
-		// Re-append saved notices at top
-		for (const n of savedNotices) msgsEl.appendChild(n);
+		renderTransientNotices();
 	}
 
 	function showLoading(text = "Loading…") {
@@ -340,7 +365,17 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 		block.appendChild(actions);
 		msgsEl.appendChild(block);
 
-		const state = { block, text, thinking, thinkingWrap, actions, copyBtn, rawText: "", rawThinking: "" };
+		const state = {
+			block,
+			text,
+			thinking,
+			thinkingWrap,
+			actions,
+			copyBtn,
+			rawText: "",
+			rawThinking: "",
+			terminalNoticeEl: null,
+		};
 		copyBtn.addEventListener("click", async (event) => {
 			event.preventDefault();
 			event.stopPropagation();
@@ -426,30 +461,31 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 	}
 
 	function appendNotice(text, kind = "info") {
+		const value = typeof text === "string" ? text : String(text ?? "");
+		if (!value) return;
 		const stick = shouldAutoStick();
-		const block = document.createElement("div");
-		block.className = "assistant-block notice-block";
-		const el = document.createElement("div");
-		el.className = `notice-text ${kind}`;
-		el.textContent = text;
-		block.appendChild(el);
-		msgsEl.appendChild(block);
+		transientNotices.push({ text: value, kind });
+		if (transientNotices.length > 20) transientNotices = transientNotices.slice(-20);
+		renderTransientNotices();
 		if (stick) scrollToBottom();
 	}
 
 	function assistantMessageKey(msg) {
 		const parsed = parseAssistantContent(msg?.content);
 		const ts = msg && typeof msg.timestamp === "number" ? msg.timestamp : null;
-		const summary = [parsed.thinking || "", parsed.text || "", parsed.toolCalls.length].join("|");
+		const stopReason = msg && typeof msg.stopReason === "string" ? msg.stopReason : "";
+		const errorMessage = msg && typeof msg.errorMessage === "string" ? msg.errorMessage : "";
+		const summary = [parsed.thinking || "", parsed.text || "", parsed.toolCalls.length, stopReason, errorMessage].join("|");
 		return ts !== null ? `a:${ts}:${summary}` : `a:${summary}`;
 	}
 
 	function renderAssistantMessage(msg) {
 		const parsed = parseAssistantContent(msg?.content);
+		const assistantNotice = getAssistantTerminalNotice(msg);
 		for (const call of parsed.toolCalls) {
 			tools.setCall(call.id, call.name, call.arguments);
 		}
-		const hasRenderableAssistantContent = Boolean(parsed.text || parsed.thinking);
+		const hasRenderableAssistantContent = Boolean(parsed.text || parsed.thinking || assistantNotice);
 		const block = currentAssistant || (hasRenderableAssistantContent ? appendAssistantBlock() : null);
 		if (block) {
 			if (parsed.thinking) {
@@ -467,8 +503,19 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 			block.copyBtn.hidden = !hasCopyText;
 			block.actions.hidden = !hasCopyText;
 			renderMarkdown(block.text, block.rawText);
+			if (assistantNotice) {
+				if (!block.terminalNoticeEl) {
+					block.terminalNoticeEl = document.createElement("div");
+					block.block.appendChild(block.terminalNoticeEl);
+				}
+				block.terminalNoticeEl.className = `notice-text ${assistantNotice.kind}`;
+				block.terminalNoticeEl.textContent = assistantNotice.text;
+			} else if (block.terminalNoticeEl) {
+				block.terminalNoticeEl.remove();
+				block.terminalNoticeEl = null;
+			}
 		}
-		return { block, parsed };
+		return { block, parsed, assistantNotice };
 	}
 
 	function maybeAppendAssistantMessage(msg) {
@@ -855,43 +902,45 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 		const prev = suppressAutoScroll;
 		suppressAutoScroll = true;
 		try {
-		for (const m of messages) {
-			if (!m || typeof m !== "object") continue;
-			if (m.role === "user") {
-				maybeAppendUserMessage(m);
-			} else if (m.role === "assistant") {
-				maybeAppendAssistantMessage(m);
-				currentAssistant = null;
-			} else if (m.role === "bashExecution") {
-				maybeAppendBashMessage(m);
-			} else if (m.role === "toolResult") {
-				const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : safeRandomUUID();
-				const toolName = typeof m.toolName === "string" ? m.toolName : "tool";
-				const isError = Boolean(m.isError);
-				if (toolName === "subagent") {
-					const rendered = upsertSubagentCardFromToolEvent(toolCallId, m, null, { phase: "end", isError });
-					if (rendered) {
-						if (tools.has(toolCallId)) tools.remove(toolCallId);
-						continue;
+			for (const m of messages) {
+				if (!m || typeof m !== "object") continue;
+				if (m.role === "user") {
+					maybeAppendUserMessage(m);
+				} else if (m.role === "assistant") {
+					maybeAppendAssistantMessage(m);
+					currentAssistant = null;
+				} else if (m.role === "bashExecution") {
+					maybeAppendBashMessage(m);
+				} else if (m.role === "toolResult") {
+					const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : safeRandomUUID();
+					const toolName = typeof m.toolName === "string" ? m.toolName : "tool";
+					const isError = Boolean(m.isError);
+					if (toolName === "subagent") {
+						const rendered = upsertSubagentCardFromToolEvent(toolCallId, m, null, { phase: "end", isError });
+						if (rendered) {
+							if (tools.has(toolCallId)) tools.remove(toolCallId);
+							continue;
+						}
+					}
+					const contentText = extractTextContent(m.content);
+					if (!tools.has(toolCallId)) {
+						tools.ensure(toolCallId, toolName, isError ? "error" : "success");
+					}
+					tools.setStatus(toolCallId, isError ? "error" : "success");
+					tools.setText(toolCallId, toolName, contentText || safeStringify(m.content));
+					tools.setImages(toolCallId, extractImagesFromContent(m.content));
+				} else if (m.customType || m.role === "custom") {
+					if (upsertSubagentCard(m)) continue;
+					if (upsertReviewCard(m)) continue;
+					// Custom extension messages (e.g. subagent results)
+					const text = extractTextContent(m.content) || m.content || "";
+					if (text && m.display !== false) {
+						appendInlineNotice(typeof text === "string" ? text : safeStringify(text));
 					}
 				}
-				const contentText = extractTextContent(m.content);
-				if (!tools.has(toolCallId)) {
-					tools.ensure(toolCallId, toolName, isError ? "error" : "success");
-				}
-				tools.setStatus(toolCallId, isError ? "error" : "success");
-				tools.setText(toolCallId, toolName, contentText || safeStringify(m.content));
-				tools.setImages(toolCallId, extractImagesFromContent(m.content));
-			} else if (m.customType || m.role === "custom") {
-				if (upsertSubagentCard(m)) continue;
-				if (upsertReviewCard(m)) continue;
-				// Custom extension messages (e.g. subagent results)
-				const text = extractTextContent(m.content) || m.content || "";
-				if (text && m.display !== false) {
-					appendNotice(typeof text === "string" ? text : safeStringify(text));
-				}
 			}
-		}
+			currentAssistant = null;
+			renderTransientNotices();
 		} finally {
 			suppressAutoScroll = prev;
 		}
@@ -959,7 +1008,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 				if (upsertReviewCard(event.message)) return;
 				const text = extractTextContent(event.message.content) || event.message.content || "";
 				if (text && event.message.display !== false) {
-					appendNotice(typeof text === "string" ? text : safeStringify(text));
+					appendInlineNotice(typeof text === "string" ? text : safeStringify(text));
 				}
 			}
 			return;
@@ -992,31 +1041,19 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 			if (msg.role === "assistant") {
 				appendedAssistantMessageKeys.add(assistantMessageKey(msg));
 				if (appendedAssistantMessageKeys.size > 200) appendedAssistantMessageKeys.clear();
-				const rendered = renderAssistantMessage(msg);
-				const block = rendered?.block;
+				renderAssistantMessage(msg);
 
 				const stopReason = typeof msg.stopReason === "string" ? msg.stopReason : "";
 				if (stopReason === "aborted" || stopReason === "error") {
 					const content = Array.isArray(msg.content) ? msg.content : [];
 					const hasToolCalls = content.some((c) => c && typeof c === "object" && c.type === "toolCall");
-
-					const abortMessage = "Operation aborted";
-					const errMessage =
-						stopReason === "aborted"
-							? abortMessage
-							: typeof msg.errorMessage === "string" && msg.errorMessage.trim()
-								? `Error: ${msg.errorMessage.trim()}`
-								: "Error";
-
 					if (hasToolCalls) {
-						tools.markPendingToolsAborted(stopReason === "aborted" ? abortMessage : errMessage);
-					} else if (block) {
-						const err = document.createElement("div");
-						err.className = "notice-text error";
-						err.textContent = stopReason === "aborted" ? abortMessage : errMessage;
-						block.block.appendChild(err);
-					} else {
-						appendNotice(stopReason === "aborted" ? abortMessage : errMessage, "error");
+						const raw = typeof msg.errorMessage === "string" ? msg.errorMessage.trim() : "";
+						const errMessage =
+							stopReason === "aborted"
+								? raw && raw !== "Request was aborted" ? raw : "Operation aborted"
+								: raw ? `Error: ${raw}` : "Error";
+						tools.markPendingToolsAborted(errMessage);
 					}
 				}
 				currentAssistant = null;

@@ -11,6 +11,74 @@ import { resolve } from "node:path";
 
 const execFile = promisify(execFileCb);
 
+const GIT_MAX_BUFFER_BYTES = 80 * 1024 * 1024;
+const SNAPSHOT_SECTION_MAX_CHARS = 12_000;
+const SNAPSHOT_UNTRACKED_CHARS = 24_000;
+
+function splitReviewArgs(rawArgs: string): string[] {
+	const args = String(rawArgs ?? "").trim();
+	if (!args) return [];
+	const tokens: string[] = [];
+	let current = "";
+	let quote: "" | "'" | '"' = "";
+	let escaped = false;
+
+	for (let i = 0; i < args.length; i += 1) {
+		const char = args[i];
+
+		if (escaped) {
+			current += char;
+			escaped = false;
+			continue;
+		}
+
+		if (char === "\\") {
+			escaped = true;
+			continue;
+		}
+
+		if (quote) {
+			if (char === quote) {
+				quote = "";
+				continue;
+			}
+			current += char;
+			continue;
+		}
+
+		if (char === '"' || char === "'") {
+			quote = char;
+			continue;
+		}
+
+		if (/\s/.test(char)) {
+			if (current) {
+				tokens.push(current);
+				current = "";
+			}
+			continue;
+		}
+
+		current += char;
+	}
+
+	if (escaped) current += "\\";
+	if (current) tokens.push(current);
+	return tokens;
+}
+
+function stripOuterQuotes(value: string): string {
+	const trimmed = String(value == null ? "" : value).trim();
+	if (trimmed.length >= 2) {
+		const first = trimmed[0];
+		const last = trimmed[trimmed.length - 1];
+		if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+			return trimmed.slice(1, -1);
+		}
+	}
+	return trimmed;
+}
+
 type ReviewMode = "working-tree" | "commit" | "branch" | "custom";
 
 const REVIEW_SYSTEM_PROMPT = `You are a senior code reviewer.
@@ -51,6 +119,11 @@ function trimText(value: string, maxChars: number): { text: string; truncated: b
 		text: `${value.slice(0, maxChars)}\n\n[truncated ${value.length - maxChars} characters]`,
 		truncated: true,
 	};
+}
+
+function trimForSnapshot(value: string, maxChars = SNAPSHOT_SECTION_MAX_CHARS): string {
+	const normalized = normalizeLines(value);
+	return trimText(normalized, maxChars).text;
 }
 
 function normalizeLines(value: string): string {
@@ -122,9 +195,13 @@ function extractTextMessage(content: unknown): string {
 		.join("\n");
 }
 
+async function ensureRefExists(cwd: string, ref: string): Promise<void> {
+	await runGit(cwd, ["cat-file", "-e", `${ref}^{commit}`]);
+}
+
 async function runGit(cwd: string, args: string[]): Promise<string> {
 	try {
-		const result = await execFile("git", args, { cwd, maxBuffer: 20 * 1024 * 1024 });
+		const result = await execFile("git", args, { cwd, maxBuffer: GIT_MAX_BUFFER_BYTES });
 		return String(result.stdout ?? "");
 	} catch (error) {
 		const err = error as { stdout?: string; stderr?: string; message?: string };
@@ -158,7 +235,7 @@ async function readSnippetForFile(cwd: string, relPath: string, maxChars = 8000)
 	}
 }
 
-async function collectUntrackedSnippets(cwd: string, maxFiles = 5, totalCharBudget = 24_000): Promise<string> {
+async function collectUntrackedSnippets(cwd: string, maxFiles = 5, totalCharBudget = SNAPSHOT_UNTRACKED_CHARS): Promise<string> {
 	const untracked = normalizeLines(await tryGit(cwd, ["ls-files", "--others", "--exclude-standard"]));
 	if (!untracked) return "";
 
@@ -176,13 +253,13 @@ async function collectUntrackedSnippets(cwd: string, maxFiles = 5, totalCharBudg
 }
 
 async function buildWorkingTreeSnapshot(cwd: string): Promise<string> {
-	const status = normalizeLines(await tryGit(cwd, ["status", "--short", "--untracked-files=normal"]));
-	const branch = normalizeLines(await tryGit(cwd, ["branch", "--show-current"])) || "(detached HEAD)";
-	const stagedStat = normalizeLines(await tryGit(cwd, ["diff", "--cached", "--stat", "--summary", "--find-renames=30%", "--no-color"]));
-	const unstagedStat = normalizeLines(await tryGit(cwd, ["diff", "--stat", "--summary", "--find-renames=30%", "--no-color"]));
-	const stagedPatch = normalizeLines(await tryGit(cwd, ["diff", "--cached", "--unified=3", "--find-renames=30%", "--no-color"]));
-	const unstagedPatch = normalizeLines(await tryGit(cwd, ["diff", "--unified=3", "--find-renames=30%", "--no-color"]));
-	const untrackedSnippets = await collectUntrackedSnippets(cwd);
+	const status = trimForSnapshot(await tryGit(cwd, ["status", "--short", "--untracked-files=normal"]));
+	const branch = trimForSnapshot(await tryGit(cwd, ["branch", "--show-current"])) || "(detached HEAD)";
+	const stagedStat = trimForSnapshot(await tryGit(cwd, ["diff", "--cached", "--stat", "--summary", "--find-renames=30%", "--no-color"]));
+	const unstagedStat = trimForSnapshot(await tryGit(cwd, ["diff", "--stat", "--summary", "--find-renames=30%", "--no-color"]));
+	const stagedPatch = trimForSnapshot(await tryGit(cwd, ["diff", "--cached", "--unified=3", "--find-renames=30%", "--no-color"]));
+	const unstagedPatch = trimForSnapshot(await tryGit(cwd, ["diff", "--unified=3", "--find-renames=30%", "--no-color"]));
+	const untrackedSnippets = trimForSnapshot(await collectUntrackedSnippets(cwd));
 
 	return [
 		formatSection("[branch]", branch),
@@ -196,15 +273,15 @@ async function buildWorkingTreeSnapshot(cwd: string): Promise<string> {
 }
 
 async function buildCommitSnapshot(cwd: string, commitRef: string): Promise<string> {
-	const show = normalizeLines(await runGit(cwd, ["show", "--stat", "--summary", "--find-renames=30%", "--unified=3", "--no-color", commitRef]));
+	const show = trimForSnapshot(await runGit(cwd, ["show", "--stat", "--summary", "--find-renames=30%", "--unified=3", "--no-color", commitRef]));
 	return formatSection(`[git show ${commitRef}]`, show);
 }
 
 async function buildBranchSnapshot(cwd: string, baseRef: string): Promise<string> {
-	const currentBranch = normalizeLines(await tryGit(cwd, ["branch", "--show-current"])) || "(detached HEAD)";
-	const log = normalizeLines(await tryGit(cwd, ["log", "--oneline", "--decorate", `${baseRef}..HEAD`, "--max-count=20"]));
-	const stat = normalizeLines(await runGit(cwd, ["diff", `${baseRef}...HEAD`, "--stat", "--summary", "--find-renames=30%", "--no-color"]));
-	const patch = normalizeLines(await runGit(cwd, ["diff", `${baseRef}...HEAD`, "--unified=3", "--find-renames=30%", "--no-color"]));
+	const currentBranch = trimForSnapshot(await tryGit(cwd, ["branch", "--show-current"]) || "") || "(detached HEAD)";
+	const log = trimForSnapshot(await tryGit(cwd, ["log", "--oneline", "--decorate", `${baseRef}..HEAD`, "--max-count=20"]));
+	const stat = trimForSnapshot(await runGit(cwd, ["diff", `${baseRef}...HEAD`, "--stat", "--summary", "--find-renames=30%", "--no-color"]));
+	const patch = trimForSnapshot(await runGit(cwd, ["diff", `${baseRef}...HEAD`, "--unified=3", "--find-renames=30%", "--no-color"]));
 
 	return [
 		formatSection("[branch]", currentBranch),
@@ -241,6 +318,11 @@ async function buildReviewSnapshot(cwd: string, params: ReviewRunParams): Promis
 	if (params.mode === "branch") {
 		const baseRef = normalizeLines(params.baseRef ?? "");
 		if (!baseRef) throw new Error("baseRef is required when mode=branch");
+		try {
+			await ensureRefExists(repoRoot, baseRef);
+		} catch {
+			throw new Error(`Could not resolve base ref "${baseRef}". Please check the name and make sure it exists.`);
+		}
 		return {
 			repoRoot,
 			branch,
@@ -317,11 +399,12 @@ async function performReview(pi: ExtensionAPI, ctx: Pick<ExtensionContext, "cwd"
 }
 
 function parseInlineReviewArgs(rawArgs: string): ReviewRunParams | null {
-	const args = normalizeLines(rawArgs);
-	if (!args) return null;
+	const tokens = splitReviewArgs(rawArgs);
+	if (!tokens.length) return null;
 
-	const [modeToken, ...restTokens] = args.split(/\s+/);
+	const [modeToken, ...restTokens] = tokens;
 	const mode = modeToken.toLowerCase();
+	const normalizeToken = (value: string) => stripOuterQuotes(value);
 
 	if (mode === "working-tree" || mode === "wt" || mode === "uncommitted") {
 		return {
@@ -331,7 +414,8 @@ function parseInlineReviewArgs(rawArgs: string): ReviewRunParams | null {
 	}
 
 	if (mode === "commit") {
-		const [commitRef, ...focusTokens] = restTokens;
+		const [commitRefRaw, ...focusTokens] = restTokens;
+		const commitRef = normalizeToken(commitRefRaw || "");
 		if (!commitRef) return { mode: "commit", commitRef: "" };
 		return {
 			mode: "commit",
@@ -341,7 +425,8 @@ function parseInlineReviewArgs(rawArgs: string): ReviewRunParams | null {
 	}
 
 	if (mode === "branch") {
-		const [baseRef, ...focusTokens] = restTokens;
+		const [baseRefRaw, ...focusTokens] = restTokens;
+		const baseRef = normalizeToken(baseRefRaw || "");
 		if (!baseRef) return { mode: "branch", baseRef: "" };
 		return {
 			mode: "branch",
@@ -357,7 +442,7 @@ function parseInlineReviewArgs(rawArgs: string): ReviewRunParams | null {
 		};
 	}
 
-	return { mode: "custom", instructions: args };
+	return { mode: "custom", instructions: tokens.slice(1).join(" ").trim() || normalizeToken(modeToken) };
 }
 
 function selectionToText(selection: { selectedOptions: string[]; customInput?: string } | undefined): string {

@@ -20,12 +20,12 @@ export function buildReviewCommand(state) {
 	if (mode === "commit") {
 		const ref = String(state?.commitRef || "").trim();
 		if (!ref) return "";
-		return focus ? `/review commit ${quoteArg(ref)} ${quoteArg(focus)}` : `/review commit ${quoteArg(ref)}`;
+		return focus ? `/review commit ${ref} ${quoteArg(focus)}` : `/review commit ${ref}`;
 	}
 	if (mode === "branch") {
 		const base = String(state?.baseRef || "").trim();
 		if (!base) return "";
-		return focus ? `/review branch ${quoteArg(base)} ${quoteArg(focus)}` : `/review branch ${quoteArg(base)}`;
+		return focus ? `/review branch ${base} ${quoteArg(focus)}` : `/review branch ${base}`;
 	}
 	const custom = String(state?.customInstructions || "").trim() || focus;
 	return custom ? `/review custom ${quoteArg(custom)}` : "";

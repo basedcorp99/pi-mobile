@@ -78,6 +78,21 @@ export function createSidebar({
 	const sessionsNeedingAttention = new Set(); // sessionIds with pending asks/notifications
 	const previouslyStreaming = new Set(); // sessionIds that were streaming last poll
 	let attentionPollTimer = null;
+	let sessionLaunchInProgress = false;
+
+	function isSessionLaunchInProgress() {
+		return sessionLaunchInProgress;
+	}
+
+	function beginSessionLaunch() {
+		if (sessionLaunchInProgress) return false;
+		sessionLaunchInProgress = true;
+		return true;
+	}
+
+	function endSessionLaunch() {
+		sessionLaunchInProgress = false;
+	}
 
 	function resetDeleteButton(button) {
 		if (!button) return;
@@ -220,18 +235,36 @@ export function createSidebar({
 			: String(sessionLabel).replace(/\s+/g, " ").trim().slice(0, 60);
 
 		const rel = formatRelativeTime(s.modified);
-		const runningIndicator = s.isRunning ? ` <span class="si-run">\u2022 running</span>` : "";
 		const needsAttention = sessionsNeedingAttention.has(s.id);
-		const attentionIndicator = needsAttention ? ` <span class="si-attention">\ud83d\udd14</span>` : "";
 
 		const name = document.createElement("div");
 		name.className = "si-name";
-		name.innerHTML = `${label}${attentionIndicator}`;
-		name.title = isWt ? `${wtName} \u2014 ${String(sessionLabel).slice(0, 60)}` : label;
+		name.textContent = label;
+		if (needsAttention) {
+			const attention = document.createElement("span");
+			attention.className = "si-attention";
+			attention.textContent = "🔔";
+			name.appendChild(attention);
+		}
+		name.title = isWt
+			? `${wtName} \u2014 ${String(sessionLabel).slice(0, 60)}${s.startAgent ? ` \u2014 ${s.startAgent}` : ""}`
+			: `${label}${s.startAgent ? ` \u2014 ${s.startAgent}` : ""}`;
 
 		const meta = document.createElement("div");
 		meta.className = "si-meta";
-		meta.innerHTML = `${rel}${runningIndicator}`;
+		meta.textContent = rel;
+		if (s.isRunning) {
+			const running = document.createElement("span");
+			running.className = "si-run";
+			running.textContent = " • running";
+			meta.appendChild(running);
+		}
+		if (s.startAgent) {
+			const agent = document.createElement("span");
+			agent.className = "si-agent";
+			agent.textContent = ` • ${s.startAgent}`;
+			meta.appendChild(agent);
+		}
 
 		row.appendChild(name);
 		row.appendChild(meta);
@@ -313,7 +346,7 @@ export function createSidebar({
 		const query = sessionSearchQuery.trim().toLowerCase();
 		const allFiltered = query
 			? lastFetchedSessions.filter((s) => {
-				const hay = [s?.name || "", s?.firstMessage || "", s?.cwd || "", s?.id || ""].join(" ");
+				const hay = [s?.name || "", s?.startAgent || "", s?.firstMessage || "", s?.cwd || "", s?.id || ""].join(" ");
 				return fuzzyMatchSession(query, hay);
 			})
 			: lastFetchedSessions.slice();
@@ -528,12 +561,14 @@ export function createSidebar({
 		createBtn.style.cssText = "padding:10px 14px;font-weight:600;justify-content:center;";
 		createBtn.textContent = "Create & Open Session";
 		createBtn.addEventListener("click", async () => {
+			if (isSessionLaunchInProgress()) return;
 			const path = input.value.trim();
 			if (!path) { onNotice("Project name cannot be empty", "error"); return; }
 			if (path.startsWith("/") || path.includes("..") || path.startsWith("~")) {
 				onNotice("Invalid path. Just type the folder name (e.g., 'myproject')", "error");
 				return;
 			}
+			if (!beginSessionLaunch()) return;
 			createBtn.disabled = true;
 			createBtn.textContent = "Creating...";
 			try {
@@ -550,6 +585,8 @@ export function createSidebar({
 				createBtn.disabled = false;
 				createBtn.textContent = "Create & Open Session";
 				onNotice(err instanceof Error ? err.message : String(err), "error");
+			} finally {
+				endSessionLaunch();
 			}
 		});
 		form.appendChild(createBtn);
@@ -764,15 +801,15 @@ export function createSidebar({
 	}
 
 	async function startInDir(cwd, launchAgent = "") {
+		if (!beginSessionLaunch()) return;
 		const trimmedCwd = cwd.trim();
 		try {
 			const gitCheck = await api.getJson(`/api/is-git-repo?path=${encodeURIComponent(trimmedCwd)}`);
 			if (gitCheck?.isGitRepo) {
+				endSessionLaunch();
 				void showWorktreeChoice(trimmedCwd, launchAgent);
 				return;
 			}
-		} catch { /* non-git, proceed normally */ }
-		try {
 			const result = await api.postJson("/api/sessions", { clientId, cwd: trimmedCwd, forceNew: Boolean(launchAgent), startAgent: launchAgent });
 			viewMode = "sessions";
 			onSessionIdSelected(result.sessionId);
@@ -782,10 +819,14 @@ export function createSidebar({
 		} catch (err) {
 			viewMode = "picker";
 			onNotice(err instanceof Error ? err.message : String(err), "error");
+		} finally {
+			if (isSessionLaunchInProgress()) endSessionLaunch();
 		}
 	}
 
 	async function startNormalSession(cwd, launchAgent = "") {
+		if (isSessionLaunchInProgress()) return;
+		if (!beginSessionLaunch()) return;
 		try {
 			const result = await api.postJson("/api/sessions", { clientId, cwd: cwd.trim(), forceNew: true, startAgent: launchAgent });
 			viewMode = "sessions";
@@ -796,6 +837,8 @@ export function createSidebar({
 		} catch (err) {
 			viewMode = "picker";
 			onNotice(err instanceof Error ? err.message : String(err), "error");
+		} finally {
+			endSessionLaunch();
 		}
 	}
 
@@ -899,8 +942,10 @@ export function createSidebar({
 		createBtn.style.cssText = "padding:10px 14px;font-weight:600;justify-content:center;";
 		createBtn.textContent = "Create Worktree";
 		createBtn.addEventListener("click", async () => {
+			if (isSessionLaunchInProgress()) return;
 			const name = nameInput.value.trim();
 			if (!name) { onNotice("Name cannot be empty", "error"); return; }
+			if (!beginSessionLaunch()) return;
 			createBtn.disabled = true;
 			createBtn.textContent = "Creating…";
 			try {
@@ -920,6 +965,8 @@ export function createSidebar({
 				createBtn.disabled = false;
 				createBtn.textContent = "Create Worktree";
 				onNotice(err instanceof Error ? err.message : String(err), "error");
+			} finally {
+				endSessionLaunch();
 			}
 		});
 		form.appendChild(createBtn);

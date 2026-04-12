@@ -35,3 +35,27 @@ export function parseAssistantContent(content) {
 	return result;
 }
 
+export function getAssistantTerminalNotice(message) {
+	if (!message || typeof message !== "object") return null;
+	const stopReason = typeof message.stopReason === "string" ? message.stopReason : "";
+	if (stopReason !== "aborted" && stopReason !== "error") return null;
+
+	const content = Array.isArray(message.content) ? message.content : [];
+	const hasToolCalls = content.some((block) => block && typeof block === "object" && block.type === "toolCall");
+	if (hasToolCalls) return null;
+
+	if (stopReason === "aborted") {
+		const raw = typeof message.errorMessage === "string" ? message.errorMessage.trim() : "";
+		return {
+			kind: "error",
+			text: raw && raw !== "Request was aborted" ? raw : "Operation aborted",
+		};
+	}
+
+	const raw = typeof message.errorMessage === "string" ? message.errorMessage.trim() : "";
+	return {
+		kind: "error",
+		text: raw ? `Error: ${raw}` : "Error",
+	};
+}
+

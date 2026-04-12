@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { toolCallToText, toolPreviewLines, toolResultToText } from "../../public/app/core/tool_format.js";
-import { parseAssistantContent } from "../../public/app/session/content.js";
+import { getAssistantTerminalNotice, parseAssistantContent } from "../../public/app/session/content.js";
 import { parseSubagentSlashMessage } from "../../public/app/session/subagent_slash.js";
 
 function extractTextContent(content) {
@@ -139,7 +139,8 @@ function applySseEvents(events) {
 			if (msg && msg.role === "user") appendUser(msg);
 			if (msg && msg.role === "assistant") {
 				const parsed = parseAssistantContent(msg.content);
-				const hasRenderableAssistantContent = Boolean(parsed.text || parsed.thinking);
+				const terminalNotice = getAssistantTerminalNotice(msg);
+				const hasRenderableAssistantContent = Boolean(parsed.text || parsed.thinking || terminalNotice);
 				if (currentAssistantIndex === null && hasRenderableAssistantContent) {
 					ensureAssistant();
 				}
@@ -150,14 +151,8 @@ function applySseEvents(events) {
 					if (parsed.text && (!blocks[currentAssistantIndex].text || parsed.text.length >= blocks[currentAssistantIndex].text.length)) {
 						blocks[currentAssistantIndex].text = parsed.text;
 					}
-				}
-				// Mirror UI: abort notice lives inside the assistant block if no tool calls.
-				const stopReason = typeof msg.stopReason === "string" ? msg.stopReason : "";
-				if ((stopReason === "aborted" || stopReason === "error") && currentAssistantIndex !== null) {
-					const content = Array.isArray(msg.content) ? msg.content : [];
-					const hasToolCalls = content.some((c) => c && typeof c === "object" && c.type === "toolCall");
-					if (!hasToolCalls) {
-						blocks[currentAssistantIndex].notices.push(stopReason === "aborted" ? "Operation aborted" : "Error");
+					if (terminalNotice) {
+						blocks[currentAssistantIndex].notices.push(terminalNotice.text);
 					}
 				}
 				currentAssistantIndex = null;
@@ -295,6 +290,22 @@ describe("golden: render model", () => {
 		const events = await loadFixture("agent_end_recovery");
 		const blocks = applySseEvents(events);
 		expect(blocks).toContainEqual({ type: "assistant", thinking: "", text: "Recovered final answer.", notices: [] });
+	});
+
+	test("assistant terminal notices keep the full error text and ignore tool-call turns", () => {
+		expect(getAssistantTerminalNotice({
+			role: "assistant",
+			content: [],
+			stopReason: "error",
+			errorMessage: "review branch mode is not supported",
+		})).toEqual({ kind: "error", text: "Error: review branch mode is not supported" });
+
+		expect(getAssistantTerminalNotice({
+			role: "assistant",
+			content: [{ type: "toolCall", id: "tool-1", name: "review_run" }],
+			stopReason: "error",
+			errorMessage: "tool failed",
+		})).toBeNull();
 	});
 });
 

@@ -700,6 +700,7 @@
     .si-meta { display:block; font-size: 11px; color: var(--text-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
     .si.active .si-name { color: var(--accent-strong); }
     .si-run { color: var(--accent-strong); }
+    .si-agent { color: var(--text-primary); opacity: 0.85; }
     .si-attention { margin-left: 6px; font-size: 11px; animation: bellPulse 2s ease-in-out infinite; }
     @keyframes bellPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
     .si-more {

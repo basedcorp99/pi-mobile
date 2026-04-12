@@ -275,11 +275,11 @@ async function createSessionWithWorktreeGuard(opts: {
 	authStorage: AuthStorage;
 	modelRegistry: ModelRegistry;
 	startAgent?: string;
-}) {
+}): Promise<{ session: AgentSession; startAgentConfig: ResolvedStartAgentConfig | null }> {
 	const startAgentConfig = await resolveStartAgentConfig(opts.cwd, opts.startAgent, opts.modelRegistry);
 	const loader = buildSessionResourceLoader(opts.cwd, startAgentConfig);
 	if (loader) await loader.reload();
-	return createAgentSession({
+	const { session } = await createAgentSession({
 		cwd: opts.cwd,
 		authStorage: opts.authStorage,
 		modelRegistry: opts.modelRegistry,
@@ -290,6 +290,7 @@ async function createSessionWithWorktreeGuard(opts: {
 		...(startAgentConfig?.model ? { model: startAgentConfig.model } : {}),
 		...(startAgentConfig?.thinkingLevel ? { thinkingLevel: startAgentConfig.thinkingLevel } : {}),
 	});
+	return { session, startAgentConfig };
 }
 
 // ---------------------------------------------------------------------------
@@ -324,6 +325,7 @@ interface RunningSession {
 	clients: Map<string, SessionClient>;
 	unsubscribe: (() => void) | null;
 	lastAssistantMessageText: string;
+	startAgent?: string;
 }
 
 function extractTextContent(content: unknown): string {
@@ -503,12 +505,13 @@ function buildMessagesFromSessionBranch(session: AgentSession): AgentMessage[] {
 	return messages;
 }
 
-function buildState(session: AgentSession, cwd: string, includeFullHistory = false): ApiSessionState {
+function buildState(session: AgentSession, cwd: string, includeFullHistory = false, startAgent?: string): ApiSessionState {
 	return {
 		sessionId: session.sessionId,
 		cwd,
 		sessionFile: session.sessionFile ?? null,
 		sessionName: session.sessionName,
+		startAgent,
 		isStreaming: session.isStreaming,
 		model: safeModelSnapshot(session),
 		thinkingLevel: session.thinkingLevel,
@@ -556,6 +559,7 @@ function serializeSessionSummary(entry: {
 	path: string;
 	cwd: string;
 	name?: string;
+	startAgent?: string;
 	created: Date;
 	modified: Date;
 	messageCount: number;
@@ -566,6 +570,7 @@ function serializeSessionSummary(entry: {
 		path: entry.path,
 		cwd: entry.cwd,
 		name: entry.name,
+		startAgent: entry.startAgent,
 		firstMessage: entry.firstMessage ?? "(no messages)",
 		created: entry.created.toISOString(),
 		modified: entry.modified.toISOString(),
@@ -943,6 +948,7 @@ export class PiWebRuntime {
 				messageCount: runtime.session.messages.length,
 				isRunning: true,
 				isStreaming: runtime.session.isStreaming ?? false,
+				startAgent: runtime.startAgent,
 			});
 		}
 		sessions.sort((a, b) => b.modified.localeCompare(a.modified));
@@ -956,6 +962,11 @@ export class PiWebRuntime {
 		for (const entry of saved) {
 			const summary = serializeSessionSummary(entry);
 			summary.isRunning = this.runningByPath.has(entry.path);
+			if (summary.isRunning) {
+				const runtimeId = this.runningByPath.get(entry.path);
+				const runtime = runtimeId ? this.runningById.get(runtimeId) : null;
+				summary.startAgent = runtime?.startAgent;
+			}
 			byId.set(summary.id, summary);
 		}
 
@@ -966,6 +977,7 @@ export class PiWebRuntime {
 				existing.isRunning = true;
 				existing.modified = toIso(runtime.modifiedAtMs);
 				existing.messageCount = runtime.session.messages.length;
+				existing.startAgent = runtime.startAgent;
 				continue;
 			}
 
@@ -983,6 +995,7 @@ export class PiWebRuntime {
 				modified: toIso(modifiedAt),
 				messageCount: runtime.session.messages.length,
 				isRunning: true,
+				startAgent: runtime.startAgent,
 			});
 		}
 
@@ -1028,7 +1041,7 @@ export class PiWebRuntime {
 		if (!runtime) {
 			throw new Error("session_not_running");
 		}
-		return buildState(runtime.session, runtime.cwd, includeFullHistory);
+		return buildState(runtime.session, runtime.cwd, includeFullHistory, runtime.startAgent);
 	}
 
 	getSessionRole(sessionId: string, clientId: string): { role: ClientRole; controllerClientId: string | null } {
@@ -1077,14 +1090,14 @@ export class PiWebRuntime {
 
 			const sessionManager = SessionManager.open(path);
 			const cwd = sessionManager.getCwd();
-			const { session } = await createSessionWithWorktreeGuard({
+			const { session, startAgentConfig } = await createSessionWithWorktreeGuard({
 				cwd,
 				sessionManager,
 				authStorage: this.authStorage,
 				modelRegistry: this.modelRegistry,
 				startAgent: request.startAgent,
 			});
-			const runtime = this.registerSession(session, cwd, clientId);
+			const runtime = this.registerSession(session, cwd, clientId, startAgentConfig);
 			await session.bindExtensions({ uiContext: this.createWebUIContext(runtime.session.sessionId) });
 			this.wrapAskTool(session, runtime.session.sessionId);
 			return { sessionId: runtime.session.sessionId };
@@ -1107,14 +1120,14 @@ export class PiWebRuntime {
 		}
 
 		const sessionManager = SessionManager.create(cwd);
-		const { session } = await createSessionWithWorktreeGuard({
+		const { session, startAgentConfig } = await createSessionWithWorktreeGuard({
 			cwd,
 			sessionManager,
 			authStorage: this.authStorage,
 			modelRegistry: this.modelRegistry,
 			startAgent: request.startAgent,
 		});
-		const runtime = this.registerSession(session, cwd, clientId);
+		const runtime = this.registerSession(session, cwd, clientId, startAgentConfig);
 		await session.bindExtensions({ uiContext: this.createWebUIContext(runtime.session.sessionId) });
 		this.wrapAskTool(session, runtime.session.sessionId);
 		return { sessionId: runtime.session.sessionId };
@@ -1364,7 +1377,7 @@ export class PiWebRuntime {
 		}
 	}
 
-	private registerSession(session: AgentSession, cwd: string, controllerClientId: string): RunningSession {
+	private registerSession(session: AgentSession, cwd: string, controllerClientId: string, startAgentConfig: ResolvedStartAgentConfig | null): RunningSession {
 		const sessionId = session.sessionId;
 		const sessionFile = session.sessionFile ?? null;
 
@@ -1386,6 +1399,7 @@ export class PiWebRuntime {
 			clients: new Map(),
 			unsubscribe: null,
 			lastAssistantMessageText: "",
+			startAgent: startAgentConfig?.name,
 		};
 
 		const unsubscribe = session.subscribe((event: AgentSessionEvent) => {

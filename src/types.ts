@@ -51,6 +51,7 @@ export interface ApiSessionSummary {
 	path: string | null;
 	cwd: string;
 	name?: string;
+	startAgent?: string | null;
 	firstMessage: string;
 	created: string;
 	modified: string;
@@ -97,6 +98,7 @@ export interface ApiSessionState {
 	cwd: string;
 	sessionFile: string | null;
 	sessionName?: string;
+	startAgent?: string | null;
 	isStreaming: boolean;
 	model: { provider: string; id: string; name?: string } | null;
 	thinkingLevel: string;

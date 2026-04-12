@@ -409,7 +409,8 @@ function updateFooter() {
 	if (metrics) leftParts.push(metrics);
 	leftParts.push(activeState.sessionId.slice(0, 8));
 	footerLeft2.textContent = leftParts.join(" • ");
-	footerRight2.textContent = `${model} • ${activeState.thinkingLevel}`;
+	const agentPart = activeState.startAgent ? `${activeState.startAgent} • ` : "";
+	footerRight2.textContent = `${agentPart}${model} • ${activeState.thinkingLevel}`;
 }
 
 function updateRolePill() {
@@ -425,7 +426,7 @@ function updateTopSelectors() {
 	const model = activeState?.model ? `${activeState.model.provider}/${activeState.model.id}` : "—";
 	if (lblModel) {
 		lblModel.textContent = model;
-		lblModel.title = model;
+		lblModel.title = activeState?.startAgent ? `${activeState.startAgent} • ${model}` : model;
 	}
 	const thinking = activeState?.thinkingLevel ? String(activeState.thinkingLevel) : "—";
 	if (lblThinking) {
