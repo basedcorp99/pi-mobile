@@ -39,6 +39,23 @@ function fuzzyMatchSession(query, hay) {
 	return qi === q.length;
 }
 
+function searchPathWithoutDotDirs(path) {
+	const parts = String(path || "").split("/");
+	const filtered = parts.filter((part, index) => {
+		if (index === 0) return true;
+		if (!part || part === "." || part === "..") return Boolean(part);
+		return !part.startsWith(".");
+	});
+	return filtered.join("/");
+}
+
+function buildSessionSearchHaystack(session, query) {
+	const trimmedQuery = String(query || "").trim();
+	const includeDotDirs = trimmedQuery.startsWith(".");
+	const cwd = includeDotDirs ? String(session?.cwd || "") : searchPathWithoutDotDirs(session?.cwd || "");
+	return [session?.name || "", session?.startAgent || "", session?.firstMessage || "", cwd, session?.id || ""].join(" ");
+}
+
 function shouldShowSession(s) {
 	if (!s || typeof s !== "object") return false;
 	if (s.isRunning) return true;
@@ -345,10 +362,7 @@ export function createSidebar({
 		lastFetchedSessions = Array.isArray(sessions) ? sessions.slice() : [];
 		const query = sessionSearchQuery.trim().toLowerCase();
 		const allFiltered = query
-			? lastFetchedSessions.filter((s) => {
-				const hay = [s?.name || "", s?.startAgent || "", s?.firstMessage || "", s?.cwd || "", s?.id || ""].join(" ");
-				return fuzzyMatchSession(query, hay);
-			})
+			? lastFetchedSessions.filter((s) => fuzzyMatchSession(query, buildSessionSearchHaystack(s, query)))
 			: lastFetchedSessions.slice();
 
 		const normalSessions = allFiltered.filter((s) => !isWorktreePath(s.cwd));

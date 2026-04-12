@@ -928,6 +928,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 					}
 					tools.setStatus(toolCallId, isError ? "error" : "success");
 					tools.setText(toolCallId, toolName, contentText || safeStringify(m.content));
+					tools.setResult(toolCallId, toolName, m);
 					tools.setImages(toolCallId, extractImagesFromContent(m.content));
 				} else if (m.customType || m.role === "custom") {
 					if (upsertSubagentCard(m)) continue;
@@ -1095,6 +1096,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 					if (!tools.has(event.toolCallId)) tools.ensure(event.toolCallId, event.toolName, "pending");
 					const stick = isPhoneLikeFn() && shouldAutoStick();
 					tools.setText(event.toolCallId, event.toolName, toolResultToText(event.partialResult));
+					tools.setResult(event.toolCallId, event.toolName, event.partialResult);
 					tools.setImages(event.toolCallId, toolResultExtractImages(event.partialResult));
 					if (stick) scrollToBottom(true);
 				}
@@ -1103,7 +1105,8 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 			if (!tools.has(event.toolCallId)) return;
 			const stick = isPhoneLikeFn() && shouldAutoStick();
 			tools.setText(event.toolCallId, event.toolName, toolResultToText(event.partialResult));
-				tools.setImages(event.toolCallId, toolResultExtractImages(event.partialResult));
+			tools.setResult(event.toolCallId, event.toolName, event.partialResult);
+			tools.setImages(event.toolCallId, toolResultExtractImages(event.partialResult));
 			if (stick) scrollToBottom(true);
 			return;
 		}
@@ -1120,6 +1123,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 					}
 					tools.setStatus(event.toolCallId, event.isError ? "error" : "success");
 					tools.setText(event.toolCallId, event.toolName, toolResultToText(event.result));
+					tools.setResult(event.toolCallId, event.toolName, event.result);
 					tools.setImages(event.toolCallId, toolResultExtractImages(event.result));
 					if (stick) scrollToBottom(true);
 				}
@@ -1133,7 +1137,8 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 			}
 			tools.setStatus(event.toolCallId, event.isError ? "error" : "success");
 			tools.setText(event.toolCallId, event.toolName, toolResultToText(event.result));
-				tools.setImages(event.toolCallId, toolResultExtractImages(event.result));
+			tools.setResult(event.toolCallId, event.toolName, event.result);
+			tools.setImages(event.toolCallId, toolResultExtractImages(event.result));
 			if (stick) scrollToBottom(true);
 			return;
 		}

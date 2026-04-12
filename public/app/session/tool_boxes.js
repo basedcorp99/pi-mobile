@@ -1,6 +1,30 @@
 import { toolCallToText, toolPreviewLines } from "../core/tool_format.js";
 
 const TOOL_EMOJI = { bash: "▶", read: "📄", write: "✏️", edit: "✏️", grep: "🔍", find: "📂", ls: "📁" };
+const STRUCTURED_PREVIEW_LINES = 40;
+
+function normalizeLines(text) {
+	return String(text ?? "").replace(/\r\n/g, "\n").split("\n");
+}
+
+function countDiffStats(lines) {
+	let additions = 0;
+	let removals = 0;
+	for (const line of lines) {
+		if (line.startsWith("+++") || line.startsWith("---")) continue;
+		if (line.startsWith("+")) additions += 1;
+		if (line.startsWith("-")) removals += 1;
+	}
+	return { additions, removals };
+}
+
+function diffLineClass(line) {
+	if (line.startsWith("@@")) return "tool-diff-hunk";
+	if (line.startsWith("+++") || line.startsWith("---")) return "tool-diff-file";
+	if (line.startsWith("+")) return "tool-diff-add";
+	if (line.startsWith("-")) return "tool-diff-del";
+	return "tool-diff-ctx";
+}
 
 export function createToolBoxManager({ msgsEl, scrollToBottom }) {
 	let toolBoxes = new Map();
@@ -59,9 +83,12 @@ export function createToolBoxManager({ msgsEl, scrollToBottom }) {
 			previewLines: toolPreviewLines(toolName),
 			expanded: false,
 			callText: "",
+			callArgs: null,
 			fullText: "",
+			result: null,
 			images: [],
 			startTime: Date.now(),
+			status,
 		};
 		toolBoxes.set(toolCallId, entry);
 		scrollToBottom();
@@ -103,15 +130,102 @@ export function createToolBoxManager({ msgsEl, scrollToBottom }) {
 		entry.body.after(container);
 	}
 
+	function appendExpandToggle(toolCallId, entry, prefixText, label, nextExpanded) {
+		const trunc = document.createElement("div");
+		trunc.className = "tool-trunc";
+		trunc.appendChild(document.createTextNode(prefixText));
+		const key = document.createElement("span");
+		key.className = "exp-key";
+		key.textContent = label;
+		key.addEventListener("click", (e) => {
+			e.stopPropagation();
+			entry.expanded = nextExpanded;
+			renderToolBoxText(toolCallId);
+		});
+		trunc.appendChild(key);
+		trunc.appendChild(document.createTextNode(")"));
+		entry.out.appendChild(trunc);
+	}
+
+	function appendStructuredLine(entry, text, className = "") {
+		const line = document.createElement("div");
+		line.className = `tool-render-line${className ? ` ${className}` : ""}`;
+		line.textContent = text ? text : "\u00a0";
+		entry.out.appendChild(line);
+	}
+
+	function renderStructuredLines(toolCallId, entry, lines, options = {}) {
+		const previewLines = options.previewLines ?? STRUCTURED_PREVIEW_LINES;
+		const classifyLine = typeof options.classifyLine === "function" ? options.classifyLine : () => "";
+		const truncated = lines.length > previewLines;
+
+		if (!truncated) {
+			for (const line of lines) appendStructuredLine(entry, line, classifyLine(line));
+			return;
+		}
+
+		if (!entry.expanded) {
+			for (const line of lines.slice(0, previewLines)) appendStructuredLine(entry, line, classifyLine(line));
+			appendExpandToggle(toolCallId, entry, `… (${lines.length - previewLines} more lines, `, "expand", true);
+			return;
+		}
+
+		for (const line of lines) appendStructuredLine(entry, line, classifyLine(line));
+		appendExpandToggle(toolCallId, entry, "… (", "collapse", false);
+	}
+
+	function renderEditToolBoxText(toolCallId, entry) {
+		if (!entry.box.classList.contains("success")) return false;
+		const diff = entry.result?.details?.diff;
+		if (typeof diff !== "string" || !diff.trim()) return false;
+
+		const diffLines = normalizeLines(diff);
+		const { additions, removals } = countDiffStats(diffLines);
+		const summary = document.createElement("div");
+		summary.className = "tool-change-summary";
+		summary.textContent = `Diff · +${additions} / -${removals}`;
+		entry.out.appendChild(summary);
+		renderStructuredLines(toolCallId, entry, diffLines, {
+			previewLines: Math.max(entry.previewLines, STRUCTURED_PREVIEW_LINES),
+			classifyLine: diffLineClass,
+		});
+		return true;
+	}
+
+	function renderWriteToolBoxText(toolCallId, entry) {
+		if (!entry.box.classList.contains("success")) return false;
+		const content = entry.callArgs && typeof entry.callArgs.content === "string" ? entry.callArgs.content : null;
+		if (typeof content !== "string") return false;
+
+		const summary = document.createElement("div");
+		summary.className = "tool-change-summary";
+		entry.out.appendChild(summary);
+		if (content.length === 0) {
+			summary.textContent = "Written content · empty file";
+			return true;
+		}
+
+		const contentLines = normalizeLines(content);
+		summary.textContent = `Written content · ${contentLines.length} line${contentLines.length === 1 ? "" : "s"}`;
+		renderStructuredLines(toolCallId, entry, contentLines, {
+			previewLines: Math.max(entry.previewLines, STRUCTURED_PREVIEW_LINES),
+			classifyLine: () => "tool-write-line",
+		});
+		return true;
+	}
+
 	function renderToolBoxText(toolCallId) {
 		const entry = toolBoxes.get(toolCallId);
 		if (!entry) return;
+
+		entry.out.innerHTML = "";
+		if (entry.toolName === "edit" && renderEditToolBoxText(toolCallId, entry)) return;
+		if (entry.toolName === "write" && renderWriteToolBoxText(toolCallId, entry)) return;
 
 		const text = String(entry.fullText ?? "");
 		const lines = text.split("\n");
 		const truncated = lines.length > entry.previewLines;
 
-		entry.out.innerHTML = "";
 		if (!truncated) {
 			entry.out.textContent = text;
 			return;
@@ -158,6 +272,7 @@ export function createToolBoxManager({ msgsEl, scrollToBottom }) {
 		const entry = ensure(toolCallId, toolName, "pending");
 		entry.toolName = toolName;
 		entry.previewLines = toolPreviewLines(toolName);
+		entry.callArgs = args;
 		entry.callText = toolCallToText(toolName, args);
 		entry.call.textContent = entry.callText;
 		// Update header label with command summary
@@ -172,6 +287,14 @@ export function createToolBoxManager({ msgsEl, scrollToBottom }) {
 		renderToolBoxText(toolCallId);
 	}
 
+	function setResult(toolCallId, toolName, result) {
+		const entry = ensure(toolCallId, toolName, "pending");
+		entry.toolName = toolName;
+		entry.previewLines = toolPreviewLines(toolName);
+		entry.result = result;
+		renderToolBoxText(toolCallId);
+	}
+
 	function setImages(toolCallId, images) {
 		const entry = toolBoxes.get(toolCallId);
 		if (!entry) return;
@@ -182,6 +305,7 @@ export function createToolBoxManager({ msgsEl, scrollToBottom }) {
 	function setStatus(toolCallId, status) {
 		const entry = toolBoxes.get(toolCallId);
 		if (!entry) return;
+		entry.status = status;
 		entry.box.classList.remove("pending", "success", "error");
 		entry.box.classList.add(status);
 		// Show duration in header
@@ -219,6 +343,7 @@ export function createToolBoxManager({ msgsEl, scrollToBottom }) {
 		has: (toolCallId) => toolBoxes.has(toolCallId),
 		setCall,
 		setText,
+		setResult,
 		setImages,
 		setStatus,
 		remove,

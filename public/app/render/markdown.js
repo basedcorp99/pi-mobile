@@ -21,6 +21,12 @@ export function renderMarkdown(target, text) {
 	}
 	const html = marked.parse(String(text));
 	target.innerHTML = sanitize(html);
+	for (const link of target.querySelectorAll("a[href]")) {
+		const href = link.getAttribute("href") || "";
+		if (!href || href.startsWith("#")) continue;
+		link.setAttribute("target", "_blank");
+		link.setAttribute("rel", "noopener noreferrer");
+	}
 }
 
 // Throttled rendering for streaming — renders at most once per animation frame

@@ -1462,6 +1462,14 @@
     .tool-call:empty { display: none; }
     .tool-out   { color: var(--text-secondary); font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 12px; margin-top: 4px; }
     .tool-trunc { color: var(--text-muted); }
+    .tool-change-summary { color: var(--text-muted); margin-bottom: 6px; font-weight: 600; }
+    .tool-render-line { display: block; white-space: pre-wrap; word-break: break-word; }
+    .tool-diff-add { color: var(--success); }
+    .tool-diff-del { color: var(--danger); }
+    .tool-diff-file { color: var(--text-muted); }
+    .tool-diff-hunk { color: var(--accent); }
+    .tool-diff-ctx,
+    .tool-write-line { color: var(--text-secondary); }
     .exp-key { color: var(--accent); cursor: pointer; transition: color .15s; }
     .exp-key:hover { color: var(--text-primary); }
     .expandable { display: none; }
