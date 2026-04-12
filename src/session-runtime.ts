@@ -1177,9 +1177,9 @@ export class PiWebRuntime {
 			this.assertController(runtime, command.clientId);
 			const bashCommand = typeof command.command === "string" ? command.command.trim() : "";
 			if (!bashCommand) return;
-			// session.executeBash uses process.cwd() internally, so wrap with cd to the session's cwd
-			const wrappedCommand = `cd ${JSON.stringify(runtime.cwd)} && ${bashCommand}`;
-			await runtime.session.executeBash(wrappedCommand, undefined, {
+			// Keep directory handling in-session (via sessionManager cwd) rather than injecting
+			// a textual `cd` prefix, which can break shell syntax/quoting.
+			await runtime.session.executeBash(bashCommand, undefined, {
 				excludeFromContext: Boolean(command.excludeFromContext),
 			});
 			this.broadcast(sessionId, { type: "state_patch", patch: buildPatch(runtime.session) });
