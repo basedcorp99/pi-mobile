@@ -542,28 +542,6 @@ function reviewUsage(): string {
 }
 
 export default function reviewExtension(pi: ExtensionAPI) {
-	pi.registerTool({
-		name: "review_run",
-		label: "Review Run",
-		description: "Run a fresh-context review of the current working tree, a commit, or a branch diff and post a summary back into the session",
-		parameters: ReviewRunSchema,
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			try {
-				const { requestId, targetLabel } = await performReview(pi, ctx, params);
-				return {
-					content: [{ type: "text", text: `Posted review summary for ${targetLabel}. requestId=${requestId}` }],
-					details: { requestId, mode: params.mode, targetLabel },
-				};
-			} catch (error) {
-				return {
-					content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
-					details: { mode: params.mode },
-					isError: true,
-				};
-			}
-		},
-	});
-
 	pi.registerCommand("review", {
 		description: "Review uncommitted changes, a commit, or a branch diff. With no args it uses the ask tool for setup.",
 		executeImmediately: true,
