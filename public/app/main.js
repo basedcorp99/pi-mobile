@@ -1240,7 +1240,7 @@ async function ensureTerminalPaneLoaded({ showNotice = false } = {}) {
 	}
 	if (!terminalPaneLoadPromise) {
 		ensureTerminalPaneStylesLoaded();
-		terminalPaneLoadPromise = import("./terminal/pane.js?v=1776094201")
+		terminalPaneLoadPromise = import("./terminal/pane.js?v=1776100001")
 			.then((module) => {
 				if (typeof module?.createTerminalPane !== "function") {
 					throw new Error("Terminal pane module is missing createTerminalPane().");

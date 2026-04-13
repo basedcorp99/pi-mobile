@@ -30,6 +30,8 @@ interface RunningTerminalTab {
 	historyChunks: string[];
 	historyBytes: number;
 	historyTruncated: boolean;
+	pendingOutput: string;
+	pendingOutputTimer: ReturnType<typeof setTimeout> | null;
 	decoder: TextDecoder;
 	terminal: any | null;
 	process: any | null;
@@ -46,6 +48,8 @@ const DEFAULT_ROWS = 28;
 const MIN_COLS = 20;
 const MIN_ROWS = 6;
 const MAX_HISTORY_BYTES = 512 * 1024;
+const OUTPUT_BATCH_INTERVAL_MS = 16;
+const OUTPUT_BATCH_MAX_BYTES = 64 * 1024;
 
 function textByteLength(value: string): number {
 	return Buffer.byteLength(value, "utf8");
@@ -273,6 +277,8 @@ export class SessionTerminalManager {
 			historyChunks: [],
 			historyBytes: 0,
 			historyTruncated: false,
+			pendingOutput: "",
+			pendingOutputTimer: null,
 			decoder: new TextDecoder(),
 			terminal: null,
 			process: null,
@@ -369,7 +375,13 @@ export class SessionTerminalManager {
 	private disposeTab(tabId: string, options: { notify: boolean }): void {
 		const tab = this.tabs.get(tabId);
 		if (!tab) return;
+		this.flushTabOutput(tabId);
 		this.tabs.delete(tabId);
+		if (tab.pendingOutputTimer) {
+			clearTimeout(tab.pendingOutputTimer);
+			tab.pendingOutputTimer = null;
+		}
+		tab.pendingOutput = "";
 		const proc = tab.process;
 		const terminal = tab.terminal;
 		tab.process = null;
@@ -410,13 +422,40 @@ export class SessionTerminalManager {
 		}
 	}
 
+	private queueTabOutput(tabId: string, chunk: string): void {
+		const tab = this.tabs.get(tabId);
+		if (!tab || !chunk) return;
+		tab.pendingOutput += chunk;
+		if (textByteLength(tab.pendingOutput) >= OUTPUT_BATCH_MAX_BYTES) {
+			this.flushTabOutput(tabId);
+			return;
+		}
+		if (tab.pendingOutputTimer) return;
+		tab.pendingOutputTimer = setTimeout(() => {
+			tab.pendingOutputTimer = null;
+			this.flushTabOutput(tabId);
+		}, OUTPUT_BATCH_INTERVAL_MS);
+	}
+
+	private flushTabOutput(tabId: string): void {
+		const tab = this.tabs.get(tabId);
+		if (!tab || !tab.pendingOutput) return;
+		if (tab.pendingOutputTimer) {
+			clearTimeout(tab.pendingOutputTimer);
+			tab.pendingOutputTimer = null;
+		}
+		const data = tab.pendingOutput;
+		tab.pendingOutput = "";
+		this.broadcast({ type: "tab_output", tabId, data });
+	}
+
 	private handleTabOutput(tabId: string, data: Uint8Array): void {
 		const tab = this.tabs.get(tabId);
 		if (!tab) return;
 		const text = tab.decoder.decode(data, { stream: true });
 		if (!text) return;
 		this.appendHistory(tab, text);
-		this.broadcast({ type: "tab_output", tabId, data: text });
+		this.queueTabOutput(tabId, text);
 	}
 
 	private handleTabExit(tabId: string, exitCode: number, signal: string | number | null): void {
@@ -425,8 +464,9 @@ export class SessionTerminalManager {
 		const flushed = tab.decoder.decode();
 		if (flushed) {
 			this.appendHistory(tab, flushed);
-			this.broadcast({ type: "tab_output", tabId, data: flushed });
+			this.queueTabOutput(tabId, flushed);
 		}
+		this.flushTabOutput(tabId);
 		tab.status = "exited";
 		tab.exitCode = Number.isFinite(exitCode) ? exitCode : null;
 		tab.signal = signal ?? null;

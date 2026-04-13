@@ -11,10 +11,58 @@ function wsUrlForSession(sessionId, clientId, token) {
 	return url.toString()
 }
 
-function estimateTerminalSize(stageEl) {
+const TERMINAL_FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace'
+const DESKTOP_TERMINAL_FONT_SIZE = 14
+const MOBILE_TERMINAL_FONT_SIZE = 13
+const TERMINAL_PADDING_X = 24
+const TERMINAL_PADDING_Y = 18
+const TERMINAL_OVERVIEW_RULER_WIDTH = 14
+const MIN_TERMINAL_COLS = 20
+const MIN_TERMINAL_ROWS = 6
+
+function getTerminalFontSize(mobileMode) {
+	return mobileMode ? MOBILE_TERMINAL_FONT_SIZE : DESKTOP_TERMINAL_FONT_SIZE
+}
+
+function measureTerminalCell(stageEl, mobileMode) {
+	if (!stageEl || typeof document === "undefined") return null
+	const probe = document.createElement("span")
+	probe.textContent = "W".repeat(32)
+	probe.setAttribute("aria-hidden", "true")
+	probe.style.position = "absolute"
+	probe.style.visibility = "hidden"
+	probe.style.pointerEvents = "none"
+	probe.style.whiteSpace = "pre"
+	probe.style.padding = "0"
+	probe.style.margin = "0"
+	probe.style.top = "0"
+	probe.style.left = "0"
+	probe.style.fontFamily = TERMINAL_FONT_FAMILY
+	probe.style.fontSize = `${getTerminalFontSize(mobileMode)}px`
+	probe.style.fontKerning = "none"
+	probe.style.lineHeight = "normal"
+	stageEl.appendChild(probe)
+	try {
+		const rect = probe.getBoundingClientRect()
+		const cellWidth = rect.width / 32
+		const cellHeight = rect.height
+		if (!Number.isFinite(cellWidth) || cellWidth <= 0 || !Number.isFinite(cellHeight) || cellHeight <= 0) return null
+		return { cellWidth, cellHeight }
+	} finally {
+		probe.remove()
+	}
+}
+
+function estimateTerminalSize(stageEl, mobileMode) {
 	const rect = stageEl?.getBoundingClientRect?.() || { width: 0, height: 0 }
-	const cols = Math.max(80, Math.floor(Math.max(0, rect.width - 24) / 9))
-	const rows = Math.max(22, Math.floor(Math.max(0, rect.height - 16) / 18))
+	const measured = measureTerminalCell(stageEl, mobileMode)
+	const cellWidth = measured?.cellWidth || (mobileMode ? 7.6 : 8.2)
+	const cellHeight = measured?.cellHeight || (mobileMode ? 16 : 17)
+	const cols = Math.max(
+		MIN_TERMINAL_COLS,
+		Math.floor(Math.max(0, rect.width - TERMINAL_PADDING_X - TERMINAL_OVERVIEW_RULER_WIDTH) / cellWidth),
+	)
+	const rows = Math.max(MIN_TERMINAL_ROWS, Math.floor(Math.max(0, rect.height - TERMINAL_PADDING_Y) / cellHeight))
 	return { cols, rows }
 }
 
@@ -85,6 +133,150 @@ function buildSearchOptions() {
 			activeMatchBorder: "rgba(126, 200, 192, 0.55)",
 			activeMatchColorOverviewRuler: "rgba(126, 200, 192, 0.55)",
 		},
+	}
+}
+
+const TERMINAL_SYNC_START = "\x1b[?2026h"
+const TERMINAL_SYNC_END = "\x1b[?2026l"
+const TERMINAL_SYNC_SEQUENCES = [TERMINAL_SYNC_START, TERMINAL_SYNC_END]
+const TERMINAL_SYNC_SEQUENCE_MAX_PREFIX = Math.max(...TERMINAL_SYNC_SEQUENCES.map((sequence) => sequence.length - 1))
+const TERMINAL_SCROLL_BOTTOM_THRESHOLD_PX = 5
+
+function extractTrailingSyncPrefix(value) {
+	const text = String(value || "")
+	const maxPrefixLength = Math.min(text.length, TERMINAL_SYNC_SEQUENCE_MAX_PREFIX)
+	for (let size = maxPrefixLength; size > 0; size -= 1) {
+		const suffix = text.slice(-size)
+		if (TERMINAL_SYNC_SEQUENCES.some((sequence) => sequence.startsWith(suffix) && sequence !== suffix)) {
+			return suffix
+		}
+	}
+	return ""
+}
+
+class TerminalWriter {
+	constructor(term) {
+		this.term = term
+		this.queue = ""
+		this.rafId = 0
+		this.syncMode = false
+		this.syncBuffer = ""
+		this.pendingControl = ""
+		this.viewport = null
+		this.scrollHandler = null
+		requestAnimationFrame(() => {
+			const viewport = this.getViewport()
+			if (!viewport) return
+			this.scrollHandler = () => {
+				if (this.term?.buffer?.active?.type === "alternate" && viewport.scrollTop !== 0) {
+					viewport.scrollTop = 0
+				}
+			}
+			viewport.addEventListener("scroll", this.scrollHandler, { passive: true })
+		})
+	}
+
+	getViewport() {
+		if (!this.viewport || !this.viewport.isConnected) {
+			this.viewport = this.term?.element?.querySelector?.(".xterm-viewport") || null
+		}
+		return this.viewport
+	}
+
+	write(data) {
+		if (typeof data !== "string" || data.length === 0) return
+		let chunk = `${this.pendingControl}${data}`
+		this.pendingControl = ""
+		const trailingPrefix = extractTrailingSyncPrefix(chunk)
+		if (trailingPrefix) {
+			this.pendingControl = trailingPrefix
+			chunk = chunk.slice(0, -trailingPrefix.length)
+		}
+		if (!chunk) return
+		this.processChunk(chunk)
+	}
+
+	processChunk(data) {
+		const syncStartIndex = data.indexOf(TERMINAL_SYNC_START)
+		const syncEndIndex = data.indexOf(TERMINAL_SYNC_END)
+		if (syncStartIndex !== -1 && !this.syncMode) {
+			if (syncStartIndex > 0) this.enqueue(data.slice(0, syncStartIndex))
+			this.syncMode = true
+			const remainder = data.slice(syncStartIndex + TERMINAL_SYNC_START.length)
+			if (remainder) this.processChunk(remainder)
+			return
+		}
+		if (this.syncMode) {
+			if (syncEndIndex !== -1) {
+				this.syncBuffer += data.slice(0, syncEndIndex)
+				this.syncMode = false
+				if (this.syncBuffer) this.enqueue(this.syncBuffer)
+				this.syncBuffer = ""
+				const afterSync = data.slice(syncEndIndex + TERMINAL_SYNC_END.length)
+				if (afterSync) this.processChunk(afterSync)
+			} else {
+				this.syncBuffer += data
+			}
+			return
+		}
+		this.enqueue(data)
+	}
+
+	enqueue(data) {
+		if (!data) return
+		this.queue += data
+		if (this.rafId) return
+		this.rafId = requestAnimationFrame(() => this.flush())
+	}
+
+	flush() {
+		this.rafId = 0
+		if (!this.queue) return
+		const data = this.queue
+		this.queue = ""
+		const viewport = this.getViewport()
+		let savedScrollTop = 0
+		let restoreScroll = false
+		if (viewport) {
+			savedScrollTop = viewport.scrollTop
+			const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight)
+			restoreScroll = this.term?.buffer?.active?.type !== "alternate"
+				&& savedScrollTop < maxScrollTop - TERMINAL_SCROLL_BOTTOM_THRESHOLD_PX
+		}
+		this.term.write(data, () => {
+			const activeViewport = this.getViewport()
+			if (!activeViewport) return
+			if (this.term?.buffer?.active?.type === "alternate") {
+				activeViewport.scrollTop = 0
+				return
+			}
+			if (!restoreScroll) return
+			const maxScrollTop = Math.max(0, activeViewport.scrollHeight - activeViewport.clientHeight)
+			activeViewport.scrollTop = Math.min(savedScrollTop, maxScrollTop)
+		})
+		if (this.queue) {
+			this.rafId = requestAnimationFrame(() => this.flush())
+		}
+	}
+
+	dispose() {
+		if (this.rafId) {
+			cancelAnimationFrame(this.rafId)
+			this.rafId = 0
+		}
+		const viewport = this.getViewport()
+		if (viewport && this.scrollHandler) {
+			viewport.removeEventListener("scroll", this.scrollHandler)
+		}
+		this.scrollHandler = null
+		const remaining = `${this.syncBuffer}${this.pendingControl}${this.queue}`
+		this.syncBuffer = ""
+		this.pendingControl = ""
+		this.queue = ""
+		this.viewport = null
+		if (remaining) {
+			try { this.term.write(remaining) } catch {}
+		}
 	}
 }
 
@@ -218,6 +410,7 @@ export function createTerminalPane({
 	function clearLocalTabs() {
 		for (const local of state.tabs.values()) {
 			if (local.refreshFrame) cancelAnimationFrame(local.refreshFrame)
+			try { local.writer?.dispose?.() } catch {}
 			try { local.term.dispose() } catch {}
 			try { local.buttonEl.remove() } catch {}
 			try { local.viewEl.remove() } catch {}
@@ -294,16 +487,31 @@ export function createTerminalPane({
 		)
 	}
 
-	function fitActiveTerminal() {
+	function fitActiveTerminal(retries = 6) {
 		const active = state.activeTabId ? state.tabs.get(state.activeTabId) : null
 		if (!active || !state.open) return
 		if (state.fitFrame) cancelAnimationFrame(state.fitFrame)
-		state.fitFrame = requestAnimationFrame(() => {
+		const attemptFit = (remaining) => {
+			if (!state.open || state.activeTabId !== active.id) {
+				state.fitFrame = 0
+				return
+			}
+			const proposed = active.fitAddon?.proposeDimensions?.()
+			if ((!proposed || !proposed.cols || !proposed.rows) && remaining > 0) {
+				state.fitFrame = requestAnimationFrame(() => attemptFit(remaining - 1))
+				return
+			}
 			state.fitFrame = 0
-			try {
-				active.fitAddon.fit()
-			} catch {}
-			queueTerminalRefresh(active)
+			try { active.term.clearTextureAtlas?.() } catch {}
+			if (proposed?.cols && proposed?.rows) {
+				try {
+					active.fitAddon.fit()
+				} catch {}
+			}
+			queueTerminalRefresh(active, { force: true })
+		}
+		state.fitFrame = requestAnimationFrame(() => {
+			state.fitFrame = requestAnimationFrame(() => attemptFit(retries))
 		})
 	}
 
@@ -373,8 +581,21 @@ export function createTerminalPane({
 		return state.activeTabId ? state.tabs.get(state.activeTabId) : null
 	}
 
-	function queueTerminalRefresh(local) {
-		if (!local || !isPhoneLikeFn()) return
+	function syncLocalTerminalSize(local, cols, rows) {
+		if (!local || !Number.isFinite(cols) || !Number.isFinite(rows)) return false
+		const nextCols = Math.max(2, Math.floor(Number(cols)))
+		const nextRows = Math.max(2, Math.floor(Number(rows)))
+		if (local.term.cols === nextCols && local.term.rows === nextRows) return false
+		try {
+			local.term.resize(nextCols, nextRows)
+			return true
+		} catch {
+			return false
+		}
+	}
+
+	function queueTerminalRefresh(local, { force = false } = {}) {
+		if (!local || (!force && !isPhoneLikeFn())) return
 		if (local.refreshFrame) cancelAnimationFrame(local.refreshFrame)
 		local.refreshFrame = requestAnimationFrame(() => {
 			local.refreshFrame = 0
@@ -433,16 +654,20 @@ export function createTerminalPane({
 		tabsEl.appendChild(buttonEl)
 
 		const mobileMode = isPhoneLikeFn()
+		const initialCols = Number.isFinite(snapshot.cols) ? Math.max(2, Math.floor(snapshot.cols)) : 80
+		const initialRows = Number.isFinite(snapshot.rows) ? Math.max(2, Math.floor(snapshot.rows)) : 24
 		const term = new Terminal({
 			allowTransparency: false,
+			cols: initialCols,
+			rows: initialRows,
 			convertEol: false,
 			cursorBlink: !mobileMode,
 			cursorStyle: mobileMode ? "bar" : "block",
 			customGlyphs: !mobileMode,
 			rescaleOverlappingGlyphs: false,
 			disableStdin: !state.canWrite || snapshot.status !== "running",
-			fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
-			fontSize: mobileMode ? 13 : 14,
+			fontFamily: TERMINAL_FONT_FAMILY,
+			fontSize: getTerminalFontSize(mobileMode),
 			scrollback: 3000,
 			theme: buildTerminalTheme(),
 		})
@@ -451,12 +676,14 @@ export function createTerminalPane({
 		const linksAddon = new WebLinksAddon((event, url) => {
 			window.open(url, "_blank", "noopener")
 		})
+		const writer = new TerminalWriter(term)
 		const local = {
 			id: snapshot.id,
 			snapshot: { ...snapshot },
 			term,
 			fitAddon,
 			searchAddon,
+			writer,
 			viewEl,
 			buttonEl,
 			labelEl,
@@ -477,9 +704,10 @@ export function createTerminalPane({
 			send({ type: "resize", tabId: local.id, cols, rows })
 		})
 		if (snapshot.history) {
-			term.write(snapshot.history, () => queueTerminalRefresh(local))
+			writer.write(snapshot.history)
+			requestAnimationFrame(() => queueTerminalRefresh(local, { force: true }))
 		}
-		queueTerminalRefresh(local)
+		queueTerminalRefresh(local, { force: true })
 
 		buttonEl.addEventListener("click", () => selectTab(local.id))
 		closeBtn.addEventListener("click", (event) => {
@@ -537,18 +765,8 @@ export function createTerminalPane({
 		local.snapshot = { ...local.snapshot, ...message.tab }
 		updateTabButton(local)
 		if (local.snapshot.status === "exited") state.stickyCtrl = false
-		const shouldApplyRemoteResize = !(local.id === state.activeTabId && (state.searchOpen || activeElementInsideTerminal()))
-		if (
-			shouldApplyRemoteResize
-			&& local.snapshot.cols
-			&& local.snapshot.rows
-			&& (local.term.cols !== local.snapshot.cols || local.term.rows !== local.snapshot.rows)
-		) {
-			try {
-				local.term.resize(local.snapshot.cols, local.snapshot.rows)
-			} catch {}
-			queueTerminalRefresh(local)
-		}
+		const didResize = syncLocalTerminalSize(local, local.snapshot.cols, local.snapshot.rows)
+		if (didResize) queueTerminalRefresh(local, { force: true })
 		renderCtrlState()
 		renderStatus()
 	}
@@ -556,7 +774,8 @@ export function createTerminalPane({
 	function handleTabOutput(message) {
 		const local = state.tabs.get(message.tabId)
 		if (!local || typeof message.data !== "string" || message.data.length === 0) return
-		local.term.write(message.data, () => queueTerminalRefresh(local))
+		local.writer.write(message.data)
+		queueTerminalRefresh(local)
 	}
 
 	function handleTabClosed(message) {
@@ -564,6 +783,7 @@ export function createTerminalPane({
 		if (!local) return
 		const closingActive = state.activeTabId === message.tabId
 		if (local.refreshFrame) cancelAnimationFrame(local.refreshFrame)
+		try { local.writer?.dispose?.() } catch {}
 		try { local.term.dispose() } catch {}
 		try { local.buttonEl.remove() } catch {}
 		try { local.viewEl.remove() } catch {}
@@ -716,7 +936,7 @@ export function createTerminalPane({
 			return false
 		}
 		const active = activeLocalTab()
-		const size = active?.fitAddon?.proposeDimensions?.() || estimateTerminalSize(stageEl)
+		const size = active?.fitAddon?.proposeDimensions?.() || estimateTerminalSize(stageEl, isPhoneLikeFn())
 		state.expectNewTabFocus = true
 		const sent = send({
 			type: "create_tab",
@@ -906,7 +1126,12 @@ export function createTerminalPane({
 		fitActiveTerminal()
 		scheduleKeyboardInsetSync()
 	})
-	window.visualViewport?.addEventListener("resize", scheduleKeyboardInsetSync)
+	window.visualViewport?.addEventListener("resize", () => {
+		fitActiveTerminal()
+		scheduleKeyboardInsetSync()
+	})
+	document.fonts?.ready?.then(() => fitActiveTerminal()).catch(() => {})
+	document.fonts?.addEventListener?.("loadingdone", () => fitActiveTerminal())
 	document.addEventListener("focusin", () => scheduleKeyboardInsetSync(), true)
 	document.addEventListener("focusout", () => scheduleKeyboardInsetSync(), true)
 	document.addEventListener("visibilitychange", () => {
