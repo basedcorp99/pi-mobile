@@ -16,6 +16,7 @@ import {
 	getVoiceInputMode,
 	getVoiceTranscriptionMode,
 	getLastVoiceTranscript,
+	getTerminalPaneOpen,
 	setFontScalePreference,
 	setSendOnEnterEnabled,
 	setStreamingSendMode,
@@ -23,6 +24,7 @@ import {
 	setVoiceInputMode,
 	setVoiceTranscriptionMode,
 	setLastVoiceTranscript,
+	setTerminalPaneOpen,
 } from "./core/storage.js";
 import { createSessionController } from "./session/controller.js";
 import { extractTextContent } from "./session/content.js";
@@ -33,6 +35,7 @@ import { createAgentLauncher } from "./ui/agent_launcher.js";
 import { createReviewLauncher } from "./ui/review_launcher.js";
 import { createSessionBranchLauncher } from "./ui/session_branch_launcher.js";
 import { createSidebar } from "./ui/sidebar.js";
+import { createTerminalPane } from "./terminal/pane.js";
 
 function haptic(ms = 10) { try { navigator.vibrate?.(ms); } catch {} }
 
@@ -64,6 +67,7 @@ const sidebarLabel = document.getElementById("sidebar-label");
 const btnSidebarLeft = document.getElementById("btn-sidebar-left");
 const btnSidebarRight = document.getElementById("btn-sidebar-right");
 
+const btnTerminal = document.getElementById("btn-terminal");
 const btnTakeover = document.getElementById("btn-takeover");
 const btnAbort = document.getElementById("btn-abort");
 const btnCompact = document.getElementById("btn-compact");
@@ -97,6 +101,7 @@ const sidebarOverlay = document.getElementById("sidebar-overlay");
 const kbMenu = document.getElementById("kb-menu");
 const kbAbort = document.getElementById("kb-abort");
 const kbCompact = document.getElementById("kb-compact");
+const kbTerminal = document.getElementById("kb-terminal");
 const kbTakeover = document.getElementById("kb-takeover");
 const kbRelease = document.getElementById("kb-release");
 const kbEnter = document.getElementById("kb-enter");
@@ -140,6 +145,7 @@ let uiPromptDialog = null;
 let agentLauncher = null;
 let reviewLauncher = null;
 let branchLauncher = null;
+let terminalPane = null;
 let pendingAttachments = [];
 const pendingPromptHistoryBySession = new Map();
 let promptHistoryCursor = -1;
@@ -768,14 +774,20 @@ function updateWorkingIndicator() {
 function updateControls() {
 	updateRolePill();
 
-	const hasSession = Boolean(sessionCtrl.getActiveSessionId());
+	const activeSessionId = sessionCtrl.getActiveSessionId();
+	const activeState = sessionCtrl.getActiveState();
+	const hasSession = Boolean(activeSessionId);
 	const isController = hasSession && sessionCtrl.isController();
-	const streaming = Boolean(sessionCtrl.getActiveState() && sessionCtrl.getActiveState().isStreaming);
-	const phone = isPhoneLike();
+	const streaming = Boolean(activeState && activeState.isStreaming);
 	const actionBusy = sessionCtrl.getActionBusy ? sessionCtrl.getActionBusy() : null;
 	const canChangeSettings = hasSession && isController && !streaming && !actionBusy;
-	const hasPromptHistory = hasSession && getSessionPromptHistory(sessionCtrl.getActiveSessionId()).length > 0;
-	askDialog?.setActiveSession?.(sessionCtrl.getActiveSessionId(), isController);
+	const hasPromptHistory = hasSession && getSessionPromptHistory(activeSessionId).length > 0;
+	askDialog?.setActiveSession?.(activeSessionId, isController);
+	terminalPane?.syncSession?.({
+		sessionId: activeSessionId,
+		cwd: activeState?.cwd || "",
+		canWrite: isController,
+	});
 
 	btnAbort.disabled = !hasSession || Boolean(actionBusy && actionBusy !== "abort" && actionBusy !== "bash");
 	btnTakeover.disabled = !hasSession || Boolean(actionBusy);
@@ -809,6 +821,9 @@ function updateControls() {
 	} else {
 		input.placeholder = streaming ? "Streaming…" : "Viewer — take over to type";
 	}
+
+	if (btnTerminal) btnTerminal.classList.toggle("active", Boolean(terminalPane?.isOpen?.()));
+	if (kbTerminal) kbTerminal.classList.toggle("active", Boolean(terminalPane?.isOpen?.()));
 
 	updateTopSelectors();
 	updateWorkingIndicator();
@@ -895,6 +910,10 @@ function closeOpenOverlays() {
 	}
 	if (sidebar?.classList?.contains("open")) {
 		sidebarCtrl?.setOpen?.(false);
+		closed = true;
+	}
+	if (terminalPane?.isOverlayOpen?.()) {
+		terminalPane.setOpen(false, { focus: false });
 		closed = true;
 	}
 	return closed;
@@ -1044,6 +1063,7 @@ menuCtrl = createMenu({
 		const isLight = document.body.classList.toggle("light");
 		setThemePreference(isLight ? "light" : "dark");
 		if (btnTheme) btnTheme.textContent = isLight ? "☾" : "☀";
+		terminalPane?.refreshTheme?.();
 	},
 	onToggleSendOnEnter: () => {
 		sendOnEnter = !sendOnEnter;
@@ -1173,6 +1193,20 @@ branchLauncher = createSessionBranchLauncher({
 	},
 });
 
+terminalPane = createTerminalPane({
+	rootEl: document.getElementById("terminal-pane"),
+	clientId,
+	token,
+	isPhoneLikeFn: isPhoneLike,
+	onNotice: (message, level = "info") => sessionCtrl.appendNotice(message, level),
+	onOpenChange: (open) => {
+		setTerminalPaneOpen(open);
+		if (sidebarCtrl && open) sidebarCtrl.setOpen(false);
+		updateControls();
+	},
+});
+terminalPane.setOpen(getTerminalPaneOpen(), { focus: false });
+
 pushCtrl = installPushNotifications({
 	api,
 	btnNotify,
@@ -1252,6 +1286,9 @@ document.addEventListener("visibilitychange", () => {
 btnAbort.addEventListener("click", () => { haptic(15); void sessionCtrl.abortRun(); });
 if (btnCompact) btnCompact.addEventListener("click", () => {
 	void sessionCtrl.compact();
+});
+if (btnTerminal) btnTerminal.addEventListener("click", () => {
+	terminalPane?.toggle?.();
 });
 btnTakeover.addEventListener("click", () => {
 	void sessionCtrl.takeOver().catch((error) => {
@@ -1388,6 +1425,7 @@ if (btnTheme) btnTheme.addEventListener("click", () => {
 	const isLight = document.body.classList.toggle("light");
 	setThemePreference(isLight ? "light" : "dark");
 	btnTheme.textContent = isLight ? "☾" : "☀";
+	terminalPane?.refreshTheme?.();
 });
 if (btnTheme && document.body.classList.contains("light")) btnTheme.textContent = "☾";
 if (btnSettings) btnSettings.addEventListener("click", () => menuCtrl.openSettingsMenu());
@@ -1417,6 +1455,9 @@ if (btnMenuHeader) btnMenuHeader.addEventListener("click", () => sidebarCtrl.tog
 if (kbAbort) kbAbort.addEventListener("click", () => void sessionCtrl.abortRun());
 if (kbCompact) kbCompact.addEventListener("click", () => {
 	void sessionCtrl.compact();
+});
+if (kbTerminal) kbTerminal.addEventListener("click", () => {
+	terminalPane?.toggle?.();
 });
 if (kbTakeover) kbTakeover.addEventListener("click", () => {
 	void sessionCtrl.takeOver().catch((error) => {
@@ -1540,6 +1581,7 @@ window.addEventListener("paste", async (e) => {
 
 window.addEventListener("keydown", (e) => {
 	if (e.key === "Escape") {
+		if (terminalPane?.handleGlobalKeydown?.(e)) return;
 		e.preventDefault();
 		handleEscapeAction();
 	}

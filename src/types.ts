@@ -210,6 +210,36 @@ export interface ApiReleaseRequest {
 	clientId: string;
 }
 
+export interface ApiTerminalTabState {
+	id: string;
+	label: string;
+	cwd: string;
+	shell: string;
+	cols: number;
+	rows: number;
+	status: "running" | "exited";
+	startedAt: number;
+	exitCode?: number | null;
+	signal?: string | number | null;
+	history?: string;
+	historyTruncated?: boolean;
+}
+
+export type ApiTerminalClientMessage =
+	| { type: "create_tab"; cols?: number; rows?: number; cwd?: string }
+	| { type: "input"; tabId: string; data: string }
+	| { type: "resize"; tabId: string; cols: number; rows: number }
+	| { type: "close_tab"; tabId: string }
+	| { type: "ping" };
+
+export type ApiTerminalServerMessage =
+	| { type: "init"; tabs: ApiTerminalTabState[] }
+	| { type: "tab_opened"; tab: ApiTerminalTabState }
+	| { type: "tab_updated"; tab: ApiTerminalTabState }
+	| { type: "tab_output"; tabId: string; data: string }
+	| { type: "tab_closed"; tabId: string }
+	| { type: "error"; message: string; code?: string; tabId?: string };
+
 export type SseEvent =
 	| {
 			type: "init";

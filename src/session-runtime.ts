@@ -25,6 +25,7 @@ import type { AgentMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { SessionTerminalManager, type TerminalClient } from "./session-terminal.ts";
 import type {
 	ApiAskQuestion,
 	ApiCommandRequest,
@@ -42,6 +43,8 @@ import type {
 	ClientRole,
 	ApiSessionPatch,
 	SseEvent,
+	ApiTerminalClientMessage,
+	ApiTerminalServerMessage,
 } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -308,6 +311,8 @@ export interface SessionClient {
 	close(): void;
 }
 
+export interface SessionTerminalClient extends TerminalClient {}
+
 export interface SessionNotification {
 	sessionId: string;
 	sessionName?: string;
@@ -328,6 +333,7 @@ interface RunningSession {
 	modifiedAtMs: number;
 	controllerClientId: string | null;
 	clients: Map<string, SessionClient>;
+	terminalManager: SessionTerminalManager;
 	unsubscribe: (() => void) | null;
 	lastAssistantMessageText: string;
 	startAgent?: string;
@@ -1525,6 +1531,28 @@ export class PiWebRuntime {
 		runtime.clients.delete(connectionId);
 	}
 
+	addTerminalClient(sessionId: string, client: SessionTerminalClient): ApiTerminalServerMessage {
+		const runtime = this.runningById.get(sessionId);
+		if (!runtime) {
+			throw new Error("session_not_running");
+		}
+		return runtime.terminalManager.addClient(client);
+	}
+
+	removeTerminalClient(sessionId: string, connectionId: string): void {
+		const runtime = this.runningById.get(sessionId);
+		if (!runtime) return;
+		runtime.terminalManager.removeClient(connectionId);
+	}
+
+	handleTerminalClientMessage(sessionId: string, connectionId: string, message: ApiTerminalClientMessage): void {
+		const runtime = this.runningById.get(sessionId);
+		if (!runtime) {
+			throw new Error("session_not_running");
+		}
+		runtime.terminalManager.handleMessage(connectionId, message);
+	}
+
 	async startSession(request: ApiCreateSessionRequest): Promise<{ sessionId: string }> {
 		const clientId = request.clientId ?? randomUUID();
 
@@ -1783,6 +1811,7 @@ export class PiWebRuntime {
 		for (const client of runtime.clients.values()) {
 			client.close();
 		}
+		runtime.terminalManager.dispose();
 
 		try {
 			await runtime.session.abort();
@@ -1811,6 +1840,7 @@ export class PiWebRuntime {
 		for (const client of runtime.clients.values()) {
 			client.close();
 		}
+		runtime.terminalManager.dispose();
 
 		try { await runtime.session.abort(); } catch {}
 		try { runtime.session.dispose(); } catch {}
@@ -1857,6 +1887,11 @@ export class PiWebRuntime {
 			modifiedAtMs: createdAtMs,
 			controllerClientId,
 			clients: new Map(),
+			terminalManager: new SessionTerminalManager({
+				sessionId,
+				cwd,
+				canWrite: (clientId) => runtime.controllerClientId === clientId,
+			}),
 			unsubscribe: null,
 			lastAssistantMessageText: "",
 			startAgent: startAgentConfig?.name,

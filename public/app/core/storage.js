@@ -157,3 +157,11 @@ export function setDeliveryMode(mode) {
 	safeLocalStorageSet("piWebDeliveryMode", mode === "all" ? "all" : "one-at-a-time");
 }
 
+export function getTerminalPaneOpen() {
+	return safeLocalStorageGet("piWebTerminalPaneOpen") === "1";
+}
+
+export function setTerminalPaneOpen(open) {
+	safeLocalStorageSet("piWebTerminalPaneOpen", open ? "1" : "0");
+}
+
