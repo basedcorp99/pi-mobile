@@ -16,6 +16,7 @@ bun.lockb
 
 # dev-only docs (contain local paths)
 AGENTS.md
+agents.md
 plan.md
 
 # playwright

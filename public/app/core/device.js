@@ -6,3 +6,18 @@ export function isPhoneLike() {
 	);
 }
 
+export function isStandalonePwa() {
+	if (typeof window === "undefined") return false;
+	try {
+		if (window.matchMedia?.("(display-mode: standalone)")?.matches) return true;
+	} catch {
+		// ignore
+	}
+	try {
+		if (window.navigator?.standalone === true) return true;
+	} catch {
+		// ignore
+	}
+	return false;
+}
+

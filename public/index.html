@@ -8,8 +8,7 @@
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-  <link rel="stylesheet" href="/vendor/xterm/xterm.css" />
-  <link rel="stylesheet" href="/styles.css?v=1775153901" />
+  <link rel="stylesheet" href="/styles.css?v=1776110401" />
 </head>
 <body>
 
@@ -46,7 +45,7 @@
 	        </span>
 	        <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
 	      </button>
-	      <button class="top-btn" id="btn-terminal" title="Toggle terminal pane">
+	      <button class="top-btn" id="btn-terminal" title="Toggle terminal pane" aria-label="Terminal">
 	        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16v12H4z"/><path d="M8 10l2 2-2 2"/><path d="M12 16h4"/></svg>
 	        <span class="txt">Terminal</span>
 	      </button>
@@ -178,14 +177,24 @@
       <div class="terminal-shell">
         <div class="terminal-head">
           <div class="terminal-head-left">
-            <button class="terminal-head-btn terminal-close-btn" id="btn-terminal-close" type="button" title="Hide terminal" aria-label="Hide terminal">✕</button>
+            <button class="terminal-head-btn terminal-head-icon-btn terminal-close-btn" id="btn-terminal-close" type="button" title="Hide terminal" aria-label="Hide terminal">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+                <path d="M6 6l12 12"/>
+                <path d="M18 6L6 18"/>
+              </svg>
+            </button>
             <div class="terminal-tabs" id="terminal-tabs"></div>
+            <button class="terminal-head-btn terminal-head-icon-btn terminal-tab-add" id="btn-terminal-new" type="button" title="New terminal tab" aria-label="New terminal tab">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+                <path d="M12 5v14"/>
+                <path d="M5 12h14"/>
+              </svg>
+            </button>
           </div>
           <div class="terminal-head-actions">
             <button class="terminal-head-btn" id="btn-terminal-find" type="button" title="Find in terminal" aria-label="Find in terminal">Find</button>
             <button class="terminal-head-btn" id="btn-terminal-copy" type="button" title="Copy terminal selection" aria-label="Copy terminal selection">Copy</button>
             <button class="terminal-head-btn" id="btn-terminal-paste" type="button" title="Paste from clipboard" aria-label="Paste from clipboard">Paste</button>
-            <button class="terminal-head-btn accent" id="btn-terminal-new" type="button" title="New terminal tab" aria-label="New terminal tab">＋</button>
           </div>
         </div>
         <div class="terminal-search" id="terminal-search" hidden>
@@ -217,6 +226,6 @@
 	    <div class="menu-scrim" id="menu-scrim"></div>
 	    <div class="menu-panel" id="menu-panel"></div>
 	  </div>
-	  <script type="module" src="/app.js?v=1775350601"></script>
+	  <script type="module" src="/app.js?v=1776094201"></script>
 	</body>
 	</html>

@@ -20,16 +20,42 @@ function estimateTerminalSize(stageEl) {
 
 function buildTerminalTheme() {
 	const css = getComputedStyle(document.body)
-	const bg = (css.getPropertyValue("--bg") || "#0c0c0e").trim() || "#0c0c0e"
-	const fg = (css.getPropertyValue("--text-body") || "#d4d4da").trim() || "#d4d4da"
-	const accent = (css.getPropertyValue("--accent") || "#7EC8C0").trim() || "#7EC8C0"
-	const muted = (css.getPropertyValue("--text-muted") || "#636370").trim() || "#636370"
+	const isLight = document.body.classList.contains("light")
+	const foreground = (css.getPropertyValue("--text-body") || (isLight ? "#2A2A32" : "#d4d4da")).trim() || (isLight ? "#2A2A32" : "#d4d4da")
+	const accent = (css.getPropertyValue("--accent") || (isLight ? "#2D8A7E" : "#7EC8C0")).trim() || (isLight ? "#2D8A7E" : "#7EC8C0")
+	const accentStrong = (css.getPropertyValue("--accent-strong") || accent).trim() || accent
+	const muted = (css.getPropertyValue("--text-muted") || (isLight ? "#8A8A98" : "#636370")).trim() || (isLight ? "#8A8A98" : "#636370")
+	if (isLight) {
+		return {
+			background: "#FBFBFD",
+			foreground,
+			cursor: accent,
+			cursorAccent: "#ffffff",
+			selectionBackground: "rgba(45, 138, 126, 0.18)",
+			black: "#1F2937",
+			red: "#D32F2F",
+			green: "#2E7D32",
+			yellow: "#B7791F",
+			blue: "#2563EB",
+			magenta: "#7C3AED",
+			cyan: accent,
+			white: "#D5DCE7",
+			brightBlack: muted,
+			brightRed: "#EF4444",
+			brightGreen: "#16A34A",
+			brightYellow: "#CA8A04",
+			brightBlue: "#3B82F6",
+			brightMagenta: "#A855F7",
+			brightCyan: accentStrong,
+			brightWhite: "#111827",
+		}
+	}
 	return {
-		background: document.body.classList.contains("light") ? "#f4f7fb" : "#090c11",
-		foreground: fg,
+		background: "#090c11",
+		foreground,
 		cursor: accent,
-		cursorAccent: bg,
-		selectionBackground: document.body.classList.contains("light") ? "rgba(45, 138, 126, 0.18)" : "rgba(126, 200, 192, 0.22)",
+		cursorAccent: "#0c0c0e",
+		selectionBackground: "rgba(126, 200, 192, 0.22)",
 		black: "#0f1720",
 		red: "#f87171",
 		green: "#6ee7a0",
@@ -37,7 +63,7 @@ function buildTerminalTheme() {
 		blue: "#60a5fa",
 		magenta: "#c084fc",
 		cyan: accent,
-		white: fg,
+		white: foreground,
 		brightBlack: muted,
 		brightRed: "#fca5a5",
 		brightGreen: "#86efac",
@@ -142,10 +168,44 @@ export function createTerminalPane({
 		expectNewTabFocus: false,
 		lastStatus: "",
 		lastStatusKind: "",
+		keyboardInset: 0,
+		keyboardSyncTimer: null,
+		fitFrame: 0,
 	}
 
 	function notice(message, kind = "info") {
 		if (typeof onNotice === "function") onNotice(message, kind)
+	}
+
+	function activeElementInsideTerminal() {
+		const active = document.activeElement
+		return Boolean(active && rootEl.contains(active))
+	}
+
+	function applyKeyboardInset() {
+		const viewport = window.visualViewport
+		let nextInset = 0
+		if (state.open && isOverlayLayout() && viewport && activeElementInsideTerminal()) {
+			const rawInset = Math.max(0, Math.round(window.innerHeight - viewport.height - Math.max(0, viewport.offsetTop || 0)))
+			if (rawInset >= 80) nextInset = rawInset
+		}
+		const previousInset = state.keyboardInset
+		if (previousInset === nextInset) return
+		state.keyboardInset = nextInset
+		rootEl.style.setProperty("--terminal-keyboard-offset", `${nextInset}px`)
+		if (previousInset > 0 && nextInset === 0 && document.activeElement === searchInput) {
+			try { searchInput.blur() } catch {}
+		}
+		fitActiveTerminal()
+	}
+
+	function scheduleKeyboardInsetSync() {
+		requestAnimationFrame(() => applyKeyboardInset())
+		if (state.keyboardSyncTimer) clearTimeout(state.keyboardSyncTimer)
+		state.keyboardSyncTimer = setTimeout(() => {
+			state.keyboardSyncTimer = null
+			applyKeyboardInset()
+		}, 90)
 	}
 
 	function clearReconnectTimer() {
@@ -157,6 +217,7 @@ export function createTerminalPane({
 
 	function clearLocalTabs() {
 		for (const local of state.tabs.values()) {
+			if (local.refreshFrame) cancelAnimationFrame(local.refreshFrame)
 			try { local.term.dispose() } catch {}
 			try { local.buttonEl.remove() } catch {}
 			try { local.viewEl.remove() } catch {}
@@ -236,10 +297,13 @@ export function createTerminalPane({
 	function fitActiveTerminal() {
 		const active = state.activeTabId ? state.tabs.get(state.activeTabId) : null
 		if (!active || !state.open) return
-		requestAnimationFrame(() => {
+		if (state.fitFrame) cancelAnimationFrame(state.fitFrame)
+		state.fitFrame = requestAnimationFrame(() => {
+			state.fitFrame = 0
 			try {
 				active.fitAddon.fit()
 			} catch {}
+			queueTerminalRefresh(active)
 		})
 	}
 
@@ -309,6 +373,17 @@ export function createTerminalPane({
 		return state.activeTabId ? state.tabs.get(state.activeTabId) : null
 	}
 
+	function queueTerminalRefresh(local) {
+		if (!local || !isPhoneLikeFn()) return
+		if (local.refreshFrame) cancelAnimationFrame(local.refreshFrame)
+		local.refreshFrame = requestAnimationFrame(() => {
+			local.refreshFrame = 0
+			try {
+				local.term.refresh(0, Math.max(0, local.term.rows - 1))
+			} catch {}
+		})
+	}
+
 	function updateTabButton(local) {
 		local.buttonEl.classList.toggle("exited", local.snapshot.status === "exited")
 		local.labelEl.textContent = local.snapshot.label
@@ -342,6 +417,9 @@ export function createTerminalPane({
 		const buttonEl = document.createElement("button")
 		buttonEl.className = "terminal-tab"
 		buttonEl.type = "button"
+		const iconEl = document.createElement("span")
+		iconEl.className = "terminal-tab-ico"
+		iconEl.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16v10H4z"/><path d="M8 11l2 2-2 2"/><path d="M12 15h4"/></svg>'
 		const labelEl = document.createElement("span")
 		labelEl.className = "terminal-tab-label"
 		const closeBtn = document.createElement("button")
@@ -349,17 +427,22 @@ export function createTerminalPane({
 		closeBtn.type = "button"
 		closeBtn.textContent = "✕"
 		closeBtn.title = "Close terminal tab"
+		buttonEl.appendChild(iconEl)
 		buttonEl.appendChild(labelEl)
 		buttonEl.appendChild(closeBtn)
 		tabsEl.appendChild(buttonEl)
 
+		const mobileMode = isPhoneLikeFn()
 		const term = new Terminal({
 			allowTransparency: false,
 			convertEol: false,
-			cursorBlink: true,
+			cursorBlink: !mobileMode,
+			cursorStyle: mobileMode ? "bar" : "block",
+			customGlyphs: !mobileMode,
+			rescaleOverlappingGlyphs: false,
 			disableStdin: !state.canWrite || snapshot.status !== "running",
 			fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
-			fontSize: isPhoneLikeFn() ? 13 : 14,
+			fontSize: mobileMode ? 13 : 14,
 			scrollback: 3000,
 			theme: buildTerminalTheme(),
 		})
@@ -378,6 +461,7 @@ export function createTerminalPane({
 			buttonEl,
 			labelEl,
 			closeBtn,
+			refreshFrame: 0,
 		}
 		term.loadAddon(fitAddon)
 		term.loadAddon(searchAddon)
@@ -393,8 +477,9 @@ export function createTerminalPane({
 			send({ type: "resize", tabId: local.id, cols, rows })
 		})
 		if (snapshot.history) {
-			term.write(snapshot.history)
+			term.write(snapshot.history, () => queueTerminalRefresh(local))
 		}
+		queueTerminalRefresh(local)
 
 		buttonEl.addEventListener("click", () => selectTab(local.id))
 		closeBtn.addEventListener("click", (event) => {
@@ -452,14 +537,17 @@ export function createTerminalPane({
 		local.snapshot = { ...local.snapshot, ...message.tab }
 		updateTabButton(local)
 		if (local.snapshot.status === "exited") state.stickyCtrl = false
+		const shouldApplyRemoteResize = !(local.id === state.activeTabId && (state.searchOpen || activeElementInsideTerminal()))
 		if (
-			local.snapshot.cols
+			shouldApplyRemoteResize
+			&& local.snapshot.cols
 			&& local.snapshot.rows
 			&& (local.term.cols !== local.snapshot.cols || local.term.rows !== local.snapshot.rows)
 		) {
 			try {
 				local.term.resize(local.snapshot.cols, local.snapshot.rows)
 			} catch {}
+			queueTerminalRefresh(local)
 		}
 		renderCtrlState()
 		renderStatus()
@@ -468,13 +556,14 @@ export function createTerminalPane({
 	function handleTabOutput(message) {
 		const local = state.tabs.get(message.tabId)
 		if (!local || typeof message.data !== "string" || message.data.length === 0) return
-		local.term.write(message.data)
+		local.term.write(message.data, () => queueTerminalRefresh(local))
 	}
 
 	function handleTabClosed(message) {
 		const local = state.tabs.get(message.tabId)
 		if (!local) return
 		const closingActive = state.activeTabId === message.tabId
+		if (local.refreshFrame) cancelAnimationFrame(local.refreshFrame)
 		try { local.term.dispose() } catch {}
 		try { local.buttonEl.remove() } catch {}
 		try { local.viewEl.remove() } catch {}
@@ -707,12 +796,19 @@ export function createTerminalPane({
 		document.body.classList.toggle("terminal-open", next && isOverlayLayout())
 		if (typeof onOpenChange === "function") onOpenChange(next)
 		if (!next) {
+			state.keyboardInset = 0
+			rootEl.style.setProperty("--terminal-keyboard-offset", "0px")
+			if (state.keyboardSyncTimer) {
+				clearTimeout(state.keyboardSyncTimer)
+				state.keyboardSyncTimer = null
+			}
 			closeSearch()
 			closeSocket({ clearTabs: true })
 			return
 		}
 		renderEmptyState()
 		connect()
+		scheduleKeyboardInsetSync()
 		fitActiveTerminal()
 		if (options.focus !== false) focusActiveTerminal()
 	}
@@ -802,13 +898,21 @@ export function createTerminalPane({
 	}
 
 	new ResizeObserver(() => fitActiveTerminal()).observe(stageEl)
-	window.addEventListener("resize", () => fitActiveTerminal())
+	window.addEventListener("resize", () => {
+		fitActiveTerminal()
+		scheduleKeyboardInsetSync()
+	})
+	window.visualViewport?.addEventListener("resize", scheduleKeyboardInsetSync)
+	document.addEventListener("focusin", () => scheduleKeyboardInsetSync(), true)
+	document.addEventListener("focusout", () => scheduleKeyboardInsetSync(), true)
 	document.addEventListener("visibilitychange", () => {
-		if (document.visibilityState === "visible" && state.open && state.sessionId && !state.ws) {
-			connect()
+		if (document.visibilityState === "visible") {
+			scheduleKeyboardInsetSync()
+			if (state.open && state.sessionId && !state.ws) connect()
 		}
 	})
 
+	rootEl.style.setProperty("--terminal-keyboard-offset", "0px")
 	renderCtrlState()
 	renderEmptyState()
 

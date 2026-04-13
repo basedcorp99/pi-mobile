@@ -1,5 +1,5 @@
 import { createApi } from "./core/api.js";
-import { isPhoneLike } from "./core/device.js";
+import { isPhoneLike, isStandalonePwa } from "./core/device.js";
 import { installFaceIdGuard } from "./core/faceid.js";
 import { installPushNotifications } from "./core/push.js";
 import { fileToImageContent } from "./core/image_upload.js";
@@ -35,7 +35,6 @@ import { createAgentLauncher } from "./ui/agent_launcher.js";
 import { createReviewLauncher } from "./ui/review_launcher.js";
 import { createSessionBranchLauncher } from "./ui/session_branch_launcher.js";
 import { createSidebar } from "./ui/sidebar.js";
-import { createTerminalPane } from "./terminal/pane.js";
 
 function haptic(ms = 10) { try { navigator.vibrate?.(ms); } catch {} }
 
@@ -1193,19 +1192,115 @@ branchLauncher = createSessionBranchLauncher({
 	},
 });
 
-terminalPane = createTerminalPane({
-	rootEl: document.getElementById("terminal-pane"),
-	clientId,
-	token,
-	isPhoneLikeFn: isPhoneLike,
-	onNotice: (message, level = "info") => sessionCtrl.appendNotice(message, level),
-	onOpenChange: (open) => {
-		setTerminalPaneOpen(open);
-		if (sidebarCtrl && open) sidebarCtrl.setOpen(false);
-		updateControls();
-	},
-});
-terminalPane.setOpen(getTerminalPaneOpen(), { focus: false });
+// Keep the optional terminal isolated from the main app boot path.
+// If xterm assets are missing, sessions should still load normally.
+let terminalPaneLoadPromise = null;
+let terminalPaneLoadFailed = false;
+let terminalPaneStylesRequested = false;
+const restoreTerminalPaneOnStartup = !isStandalonePwa() && getTerminalPaneOpen();
+if (isStandalonePwa()) setTerminalPaneOpen(false);
+
+function ensureTerminalPaneStylesLoaded() {
+	if (terminalPaneStylesRequested) return;
+	terminalPaneStylesRequested = true;
+	if (document.querySelector('link[data-terminal-pane-style="xterm"]')) return;
+	const link = document.createElement("link");
+	link.rel = "stylesheet";
+	link.href = "/vendor/xterm/xterm.css";
+	link.dataset.terminalPaneStyle = "xterm";
+	document.head.appendChild(link);
+}
+
+function setTerminalButtonAvailability(unavailable) {
+	if (btnTerminal) {
+		btnTerminal.disabled = unavailable;
+		btnTerminal.title = unavailable ? "Terminal unavailable" : "Toggle terminal pane";
+	}
+	if (kbTerminal) {
+		kbTerminal.disabled = unavailable;
+		kbTerminal.title = unavailable ? "Terminal unavailable" : "Terminal";
+	}
+}
+
+function getTerminalPaneStateSnapshot() {
+	const activeSessionId = sessionCtrl.getActiveSessionId();
+	const activeState = sessionCtrl.getActiveState();
+	return {
+		sessionId: activeSessionId,
+		cwd: activeState?.cwd || "",
+		canWrite: Boolean(activeSessionId && sessionCtrl.isController()),
+	};
+}
+
+async function ensureTerminalPaneLoaded({ showNotice = false } = {}) {
+	if (terminalPane) return terminalPane;
+	if (terminalPaneLoadFailed) {
+		if (showNotice) sessionCtrl.appendNotice("Terminal is unavailable. Reinstall dependencies and reload the page.", "warning");
+		return null;
+	}
+	if (!terminalPaneLoadPromise) {
+		ensureTerminalPaneStylesLoaded();
+		terminalPaneLoadPromise = import("./terminal/pane.js?v=1776094201")
+			.then((module) => {
+				if (typeof module?.createTerminalPane !== "function") {
+					throw new Error("Terminal pane module is missing createTerminalPane().");
+				}
+				terminalPane = module.createTerminalPane({
+					rootEl: document.getElementById("terminal-pane"),
+					clientId,
+					token,
+					isPhoneLikeFn: isPhoneLike,
+					onNotice: (message, level = "info") => sessionCtrl.appendNotice(message, level),
+					onOpenChange: (open) => {
+						setTerminalPaneOpen(open);
+						if (sidebarCtrl && open) sidebarCtrl.setOpen(false);
+						updateControls();
+					},
+				});
+				terminalPane.syncSession(getTerminalPaneStateSnapshot());
+				setTerminalButtonAvailability(false);
+				updateControls();
+				return terminalPane;
+			})
+			.catch((error) => {
+				terminalPaneLoadFailed = true;
+				setTerminalPaneOpen(false);
+				setTerminalButtonAvailability(true);
+				updateControls();
+				console.error("Failed to initialize terminal pane", error);
+				if (showNotice) sessionCtrl.appendNotice("Terminal is unavailable. Reinstall dependencies and reload the page.", "warning");
+				return null;
+			})
+			.finally(() => {
+				terminalPaneLoadPromise = null;
+			});
+	}
+	return terminalPaneLoadPromise;
+}
+
+async function toggleTerminalPane() {
+	const pane = await ensureTerminalPaneLoaded({ showNotice: true });
+	pane?.toggle?.();
+}
+
+function setSidebarOpenFromUi(open) {
+	const next = Boolean(open);
+	if (next && terminalPane?.isOverlayOpen?.()) {
+		terminalPane.setOpen(false, { focus: false });
+	}
+	sidebarCtrl?.setOpen?.(next);
+}
+
+function toggleSidebarFromUi() {
+	const isOpen = sidebarCtrl?.isOpen?.() || sidebar?.classList?.contains("open");
+	setSidebarOpenFromUi(!isOpen);
+}
+
+void (async () => {
+	if (!restoreTerminalPaneOnStartup) return;
+	const pane = await ensureTerminalPaneLoaded({ showNotice: true });
+	pane?.setOpen?.(true, { focus: false });
+})();
 
 pushCtrl = installPushNotifications({
 	api,
@@ -1288,7 +1383,7 @@ if (btnCompact) btnCompact.addEventListener("click", () => {
 	void sessionCtrl.compact();
 });
 if (btnTerminal) btnTerminal.addEventListener("click", () => {
-	terminalPane?.toggle?.();
+	void toggleTerminalPane();
 });
 btnTakeover.addEventListener("click", () => {
 	void sessionCtrl.takeOver().catch((error) => {
@@ -1450,14 +1545,14 @@ if (btnCommands) {
 	});
 }
 
-if (kbMenu) kbMenu.addEventListener("click", () => sidebarCtrl.toggleOpen());
-if (btnMenuHeader) btnMenuHeader.addEventListener("click", () => sidebarCtrl.toggleOpen());
+if (kbMenu) kbMenu.addEventListener("click", () => toggleSidebarFromUi());
+if (btnMenuHeader) btnMenuHeader.addEventListener("click", () => toggleSidebarFromUi());
 if (kbAbort) kbAbort.addEventListener("click", () => void sessionCtrl.abortRun());
 if (kbCompact) kbCompact.addEventListener("click", () => {
 	void sessionCtrl.compact();
 });
 if (kbTerminal) kbTerminal.addEventListener("click", () => {
-	terminalPane?.toggle?.();
+	void toggleTerminalPane();
 });
 if (kbTakeover) kbTakeover.addEventListener("click", () => {
 	void sessionCtrl.takeOver().catch((error) => {
@@ -1484,7 +1579,7 @@ if (kbEnter) kbEnter.addEventListener("click", () => sendPromptFromInput());
 	}
 }
 
-if (sidebarOverlay) sidebarOverlay.addEventListener("click", () => sidebarCtrl.setOpen(false));
+if (sidebarOverlay) sidebarOverlay.addEventListener("click", () => setSidebarOpenFromUi(false));
 
 // Scroll-to-bottom floating button with unread badge
 if (btnScrollBottom && msgs) {
@@ -1627,12 +1722,12 @@ function installSidebarSwipeGestures() {
 		const dy = tracking.lastY - tracking.y;
 		if (Math.abs(dx) < 14 || Math.abs(dx) < Math.abs(dy)) return;
 		if (tracking.mode === "open" && dx > commitThreshold) {
-			sidebarCtrl.setOpen(true);
+			setSidebarOpenFromUi(true);
 			tracking = null;
 			return;
 		}
 		if (tracking.mode === "close" && dx < -commitThreshold) {
-			sidebarCtrl.setOpen(false);
+			setSidebarOpenFromUi(false);
 			tracking = null;
 		}
 	};

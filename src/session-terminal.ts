@@ -1,5 +1,6 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { userInfo } from "node:os";
 import { basename, resolve } from "node:path";
 import type {
 	ApiTerminalClientMessage,
@@ -66,12 +67,52 @@ function normalizeCwd(input: string | undefined, fallback: string): string {
 	return existsSync(resolved) ? resolved : fallback;
 }
 
-function resolveShellCommand(): { shell: string; args: string[] } {
-	const shell = process.env.SHELL?.trim() || "/bin/bash";
-	const name = basename(shell).toLowerCase();
-	if (name === "fish") return { shell, args: ["-il"] };
-	if (name === "bash" || name === "zsh" || name === "sh" || name === "ksh") return { shell, args: ["-il"] };
-	return { shell, args: ["-i"] };
+const SCRIPT_WRAPPER_CANDIDATES = ["/usr/bin/script", "/bin/script"];
+
+function normalizeShellPath(shell: string | null | undefined): string | null {
+	const normalized = typeof shell === "string" ? shell.trim() : "";
+	if (!normalized || !normalized.startsWith("/") || !existsSync(normalized)) return null;
+	const name = basename(normalized).toLowerCase();
+	if (name === "false" || name === "nologin") return null;
+	return normalized;
+}
+
+function resolveMachineDefaultShell(): string {
+	let username = "";
+	try {
+		username = userInfo().username || "";
+	} catch {
+		// ignore
+	}
+	if (!username) username = process.env.USER?.trim() || process.env.LOGNAME?.trim() || "";
+	if (username) {
+		try {
+			const line = readFileSync("/etc/passwd", "utf8")
+				.split(/\r?\n/)
+				.find((entry) => entry.startsWith(`${username}:`));
+			const resolved = normalizeShellPath(line?.split(":").at(-1));
+			if (resolved) return resolved;
+		} catch {
+			// ignore passwd lookup failures and fall back to env/defaults
+		}
+	}
+	return normalizeShellPath(process.env.SHELL) || normalizeShellPath("/bin/sh") || "/bin/sh";
+}
+
+function shellQuote(value: string): string {
+	return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function resolveShellCommand(): { shell: string; command: string[] } {
+	const shell = resolveMachineDefaultShell();
+	const scriptWrapper = SCRIPT_WRAPPER_CANDIDATES.find((candidate) => existsSync(candidate));
+	if (scriptWrapper) {
+		return {
+			shell,
+			command: [scriptWrapper, "-qefc", `exec ${shellQuote(shell)}`, "/dev/null"],
+		};
+	}
+	return { shell, command: [shell] };
 }
 
 function toTerminalSnapshot(tab: RunningTerminalTab, includeHistory = false): ApiTerminalTabState {
@@ -214,7 +255,7 @@ export class SessionTerminalManager {
 
 		const cwd = normalizeCwd(requestedCwd, this.sessionCwd);
 		const size = normalizeTerminalSize(cols, rows);
-		const { shell, args } = resolveShellCommand();
+		const { shell, command } = resolveShellCommand();
 		const id = randomUUID();
 		const label = `${basename(shell) || "term"} ${this.nextOrdinal++}`;
 
@@ -249,12 +290,14 @@ export class SessionTerminalManager {
 				},
 			});
 
-			const proc = Bun.spawn([shell, ...args], {
+			const proc = Bun.spawn(command, {
 				cwd,
 				env: {
 					...process.env,
+					SHELL: shell,
 					TERM: "xterm-256color",
 					COLORTERM: "truecolor",
+					PROMPT_EOL_MARK: "",
 					PWD: cwd,
 					PI_WEB_TERMINAL: "1",
 					PI_WEB_SESSION_ID: this.options.sessionId,
