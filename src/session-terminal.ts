@@ -285,9 +285,10 @@ export class SessionTerminalManager {
 				data: (_terminal: unknown, data: Uint8Array) => {
 					this.handleTabOutput(id, data);
 				},
-				exit: (_terminal: unknown, exitCode: number, signal: string | number | null) => {
-					this.handleTabExit(id, exitCode, signal);
-				},
+				// NOTE: This exit fires when the PTY stream closes (EOF/error),
+				// NOT when the subprocess exits. exitCode here is 0 (clean EOF) or
+				// 1 (error) — PTY lifecycle, not process exit code.
+				// Actual process exit is handled via onExit in Bun.spawn below.
 			});
 
 			const proc = Bun.spawn(command, {
@@ -303,7 +304,12 @@ export class SessionTerminalManager {
 					PI_WEB_SESSION_ID: this.options.sessionId,
 				},
 				terminal,
+				onExit: (_proc, exitCode, signalCode) => {
+					this.handleTabExit(id, exitCode, signalCode);
+				},
 			});
+			// Don't let lingering shell processes block server shutdown
+			proc.unref();
 
 			tab.terminal = terminal;
 			tab.process = proc;
@@ -368,15 +374,18 @@ export class SessionTerminalManager {
 		const terminal = tab.terminal;
 		tab.process = null;
 		tab.terminal = null;
-		try {
-			proc?.kill?.();
-		} catch {
-			// ignore process cleanup failure
-		}
+		// Close terminal first to stop I/O callbacks
 		try {
 			terminal?.close?.();
 		} catch {
 			// ignore pty cleanup failure
+		}
+		// Force kill the process with SIGKILL to prevent zombie/leaked processes
+		// SIGTERM alone may leave orphaned child processes
+		try {
+			proc?.kill?.("SIGKILL");
+		} catch {
+			// ignore process cleanup failure (process may have already exited)
 		}
 		if (options.notify) {
 			this.broadcast({ type: "tab_closed", tabId });
