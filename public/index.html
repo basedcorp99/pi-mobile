@@ -8,6 +8,7 @@
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="stylesheet" href="/vendor/xterm/xterm.css" />
   <link rel="stylesheet" href="/styles.css?v=1775153901" />
 </head>
 <body>
@@ -44,6 +45,10 @@
 	          </svg>
 	        </span>
 	        <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+	      </button>
+	      <button class="top-btn" id="btn-terminal" title="Toggle terminal pane">
+	        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16v12H4z"/><path d="M8 10l2 2-2 2"/><path d="M12 16h4"/></svg>
+	        <span class="txt">Terminal</span>
 	      </button>
 	      <button class="top-btn" id="btn-takeover" title="Take over control">
 	        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M13 5l7 7-7 7"/></svg>
@@ -83,6 +88,10 @@
       <button class="keybtn" id="kb-release" title="Release">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v10"/><path d="M18.36 6.64a9 9 0 1 1-12.72 0"/></svg>
         Release
+      </button>
+      <button class="keybtn" id="kb-terminal" title="Terminal">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16v12H4z"/><path d="M8 10l2 2-2 2"/><path d="M12 16h4"/></svg>
+        Terminal
       </button>
       <button class="keybtn" id="kb-takeover" title="Take over">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M13 5l7 7-7 7"/></svg>
@@ -164,6 +173,44 @@
         </div>
       </div>
     </div>
+
+    <aside class="terminal-pane" id="terminal-pane" aria-label="Terminal pane">
+      <div class="terminal-shell">
+        <div class="terminal-head">
+          <div class="terminal-head-left">
+            <button class="terminal-head-btn terminal-close-btn" id="btn-terminal-close" type="button" title="Hide terminal" aria-label="Hide terminal">✕</button>
+            <div class="terminal-tabs" id="terminal-tabs"></div>
+          </div>
+          <div class="terminal-head-actions">
+            <button class="terminal-head-btn" id="btn-terminal-find" type="button" title="Find in terminal" aria-label="Find in terminal">Find</button>
+            <button class="terminal-head-btn" id="btn-terminal-copy" type="button" title="Copy terminal selection" aria-label="Copy terminal selection">Copy</button>
+            <button class="terminal-head-btn" id="btn-terminal-paste" type="button" title="Paste from clipboard" aria-label="Paste from clipboard">Paste</button>
+            <button class="terminal-head-btn accent" id="btn-terminal-new" type="button" title="New terminal tab" aria-label="New terminal tab">＋</button>
+          </div>
+        </div>
+        <div class="terminal-search" id="terminal-search" hidden>
+          <input class="terminal-search-input" id="terminal-search-input" type="search" placeholder="Find in terminal…" enterkeyhint="search" />
+          <button class="terminal-head-btn" id="btn-terminal-search-prev" type="button" title="Previous match" aria-label="Previous match">↑</button>
+          <button class="terminal-head-btn" id="btn-terminal-search-next" type="button" title="Next match" aria-label="Next match">↓</button>
+          <button class="terminal-head-btn" id="btn-terminal-search-close" type="button" title="Close search" aria-label="Close search">✕</button>
+        </div>
+        <div class="terminal-status" id="terminal-status">Open a session to start a terminal.</div>
+        <div class="terminal-stage" id="terminal-stage">
+          <div class="terminal-empty" id="terminal-empty">Open a session to start a terminal.</div>
+        </div>
+        <div class="terminal-mobile-keys" id="terminal-mobile-keys">
+          <button class="terminal-key" id="terminal-key-ctrl" type="button">Ctrl</button>
+          <button class="terminal-key" data-seq="\u001b" type="button">Esc</button>
+          <button class="terminal-key" data-seq="\t" type="button">Tab</button>
+          <button class="terminal-key" data-seq="\u001b[A" type="button">↑</button>
+          <button class="terminal-key" data-seq="\u001b[B" type="button">↓</button>
+          <button class="terminal-key" data-seq="\u001b[D" type="button">←</button>
+          <button class="terminal-key" data-seq="\u001b[C" type="button">→</button>
+          <button class="terminal-key" data-seq="\u001b[5~" type="button">PgUp</button>
+          <button class="terminal-key" data-seq="\u001b[6~" type="button">PgDn</button>
+        </div>
+      </div>
+    </aside>
   </div>
 
 	  <div class="menu-overlay" id="menu-overlay">

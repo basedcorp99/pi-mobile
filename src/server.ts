@@ -28,6 +28,8 @@ import type {
 	ApiSessionState,
 	ApiTakeoverRequest,
 	SseEvent,
+	ApiTerminalClientMessage,
+	ApiTerminalServerMessage,
 } from "./types.ts";
 
 interface ServerArgs {
@@ -305,6 +307,43 @@ const publicRoot = resolve(publicDir) + sep;
 const simpleWebAuthnBrowserDir = join(import.meta.dir, "..", "node_modules", "@simplewebauthn", "browser", "esm");
 const simpleWebAuthnBrowserRoot = resolve(simpleWebAuthnBrowserDir) + sep;
 const simpleWebAuthnBrowserUrlPrefix = "/vendor/simplewebauthn/browser/esm/";
+const vendorStaticFiles = new Map<string, { path: string; contentType?: string }>([
+	[
+		"/vendor/xterm/xterm.mjs",
+		{
+			path: join(import.meta.dir, "..", "node_modules", "@xterm", "xterm", "lib", "xterm.mjs"),
+			contentType: "text/javascript; charset=utf-8",
+		},
+	],
+	[
+		"/vendor/xterm/xterm.css",
+		{
+			path: join(import.meta.dir, "..", "node_modules", "@xterm", "xterm", "css", "xterm.css"),
+			contentType: "text/css; charset=utf-8",
+		},
+	],
+	[
+		"/vendor/xterm/addon-fit.mjs",
+		{
+			path: join(import.meta.dir, "..", "node_modules", "@xterm", "addon-fit", "lib", "addon-fit.mjs"),
+			contentType: "text/javascript; charset=utf-8",
+		},
+	],
+	[
+		"/vendor/xterm/addon-search.mjs",
+		{
+			path: join(import.meta.dir, "..", "node_modules", "@xterm", "addon-search", "lib", "addon-search.mjs"),
+			contentType: "text/javascript; charset=utf-8",
+		},
+	],
+	[
+		"/vendor/xterm/addon-web-links.mjs",
+		{
+			path: join(import.meta.dir, "..", "node_modules", "@xterm", "addon-web-links", "lib", "addon-web-links.mjs"),
+			contentType: "text/javascript; charset=utf-8",
+		},
+	],
+]);
 
 function requireJsonBody(req: Request): Promise<Record<string, unknown>> {
 	return req.json().catch(() => ({}));
@@ -620,12 +659,81 @@ function parseSessionRoute(pathname: string): { sessionId: string; action: strin
 	return { sessionId: parts[2], action: parts[3] };
 }
 
+interface TerminalWebSocketData {
+	kind: "terminal";
+	sessionId: string;
+	clientId: string;
+	connectionId: string;
+}
+
+function encodeTerminalEvent(event: ApiTerminalServerMessage): string {
+	return JSON.stringify(event);
+}
+
 Bun.serve({
 	hostname: host,
 	port,
 	idleTimeout: 255,
 	...(tls ? { tls: { cert: Bun.file(tls.certFile), key: Bun.file(tls.keyFile) } } : {}),
-	async fetch(req): Promise<Response> {
+	websocket: {
+		open(ws) {
+			const data = ws.data as TerminalWebSocketData | undefined;
+			if (!data || data.kind !== "terminal") {
+				try { ws.close(1008, "invalid_socket"); } catch {}
+				return;
+			}
+			try {
+				const init = runtime.addTerminalClient(data.sessionId, {
+					connectionId: data.connectionId,
+					clientId: data.clientId,
+					connectedAtMs: Date.now(),
+					send(event) {
+						try { ws.send(encodeTerminalEvent(event)); } catch {}
+					},
+					close(code, reason) {
+						try { ws.close(code, reason); } catch {}
+					},
+				});
+				ws.send(encodeTerminalEvent(init));
+			} catch {
+				try { ws.close(1008, "session_not_running"); } catch {}
+			}
+		},
+		message(ws, rawMessage) {
+			const data = ws.data as TerminalWebSocketData | undefined;
+			if (!data || data.kind !== "terminal") return;
+			let parsed: ApiTerminalClientMessage;
+			try {
+				const text = typeof rawMessage === "string" ? rawMessage : Buffer.from(rawMessage).toString("utf8");
+				parsed = JSON.parse(text) as ApiTerminalClientMessage;
+			} catch {
+				try {
+					ws.send(encodeTerminalEvent({ type: "error", message: "Invalid terminal payload", code: "invalid_json" }));
+				} catch {}
+				return;
+			}
+			try {
+				runtime.handleTerminalClientMessage(data.sessionId, data.connectionId, parsed);
+			} catch (error) {
+				try {
+					ws.send(encodeTerminalEvent({
+						type: "error",
+						message: error instanceof Error ? error.message : String(error),
+						code: "terminal_runtime_error",
+					}));
+				} catch {}
+			}
+		},
+		close(ws) {
+			const data = ws.data as TerminalWebSocketData | undefined;
+			if (!data || data.kind !== "terminal") return;
+			runtime.removeTerminalClient(data.sessionId, data.connectionId);
+		},
+		binaryType: "uint8array",
+		maxPayloadLength: 2 * 1024 * 1024,
+		idleTimeout: 120,
+	},
+	async fetch(req, server): Promise<Response> {
 		const url = new URL(req.url);
 
 		if (url.pathname === "/health") {
@@ -646,6 +754,11 @@ Bun.serve({
 			const filePath = resolveSimpleWebAuthnBrowserFile(url);
 			if (filePath) return serveStatic(filePath);
 			return new Response("Not found", { status: 404 });
+		}
+
+		const vendorStatic = vendorStaticFiles.get(url.pathname);
+		if (req.method === "GET" && vendorStatic) {
+			return serveStatic(vendorStatic.path, vendorStatic.contentType);
 		}
 
 		if (req.method === "GET" && !isApiPath(url.pathname)) {
@@ -1055,6 +1168,26 @@ Bun.serve({
 			);
 
 			return stream.response;
+		}
+
+		if (req.method === "GET" && action === "terminal") {
+			const clientId = url.searchParams.get("clientId")?.trim() || randomUUID();
+			try {
+				runtime.getSessionRole(sessionId, clientId);
+			} catch {
+				return errorResponse("Session not running", 404);
+			}
+			const upgraded = server.upgrade(req, {
+				data: {
+					kind: "terminal",
+					sessionId,
+					clientId,
+					connectionId: randomUUID(),
+				} satisfies TerminalWebSocketData,
+			});
+			return upgraded
+				? (undefined as never)
+				: errorResponse("Failed to open terminal websocket", 400);
 		}
 
 		if (req.method === "POST" && action === "tree") {
