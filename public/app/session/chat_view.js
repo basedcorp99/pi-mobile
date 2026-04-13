@@ -163,6 +163,10 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 	let autoStickToBottom = true;
 	let internalScroll = false;
 	let transientNotices = [];
+	let loadingSpinEl = null;
+	let loadingIntervalId = null;
+	let loadingFrame = 0;
+	const loadingFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 	function isNearBottom(el, thresholdPx = 24) {
 		const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -297,7 +301,29 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 		});
 	}
 
+	function stopLoadingSpinner() {
+		loadingSpinEl = null;
+		if (loadingIntervalId) {
+			clearInterval(loadingIntervalId);
+			loadingIntervalId = null;
+		}
+	}
+
+	function startLoadingSpinner(spinEl) {
+		stopLoadingSpinner();
+		loadingSpinEl = spinEl;
+		const renderFrame = () => {
+			if (!loadingSpinEl) return;
+			loadingSpinEl.textContent = loadingFrames[loadingFrame % loadingFrames.length];
+			loadingFrame = (loadingFrame + 1) % loadingFrames.length;
+		};
+		loadingFrame = 0;
+		renderFrame();
+		loadingIntervalId = setInterval(renderFrame, 80);
+	}
+
 	function clear(options = {}) {
+		stopLoadingSpinner();
 		if (options.discardNotices) transientNotices = [];
 		msgsEl.innerHTML = "";
 		const spacer = document.createElement("div");
@@ -322,8 +348,20 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 		clear({ discardNotices: true });
 		const block = document.createElement("div");
 		block.className = "assistant-block loading-placeholder";
-		block.innerHTML = `<div class="thinking-text" style="display:flex;align-items:center;gap:8px"><span class="work-spin" style="animation:spin 1s linear infinite">⠋</span> ${text}</div>`;
+		const row = document.createElement("div");
+		row.className = "thinking-text";
+		row.style.display = "flex";
+		row.style.alignItems = "center";
+		row.style.gap = "8px";
+		const spin = document.createElement("span");
+		spin.className = "work-spin";
+		const label = document.createElement("span");
+		label.textContent = text;
+		row.appendChild(spin);
+		row.appendChild(label);
+		block.appendChild(row);
 		msgsEl.appendChild(block);
+		startLoadingSpinner(spin);
 	}
 
 	function appendAssistantBlock() {

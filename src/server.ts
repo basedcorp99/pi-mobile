@@ -986,8 +986,9 @@ Bun.serve({
 
 		if (req.method === "GET" && action === "state") {
 			const includeFullHistory = url.searchParams.get("fullHistory") === "1" || url.searchParams.get("full") === "1";
+			const tailMessages = Math.max(0, Number.parseInt(url.searchParams.get("tailMessages") || "0", 10) || 0);
 			try {
-				const state: ApiSessionState = runtime.getSessionState(sessionId, includeFullHistory);
+				const state: ApiSessionState = runtime.getSessionState(sessionId, includeFullHistory, tailMessages);
 				return json(state, 200);
 			} catch {
 				return errorResponse("Session not running", 404);
@@ -1005,9 +1006,10 @@ Bun.serve({
 		if (req.method === "GET" && action === "events") {
 			const clientId = url.searchParams.get("clientId")?.trim() || randomUUID();
 			const includeFullHistory = url.searchParams.get("fullHistory") === "1" || url.searchParams.get("full") === "1";
+			const tailMessages = Math.max(0, Number.parseInt(url.searchParams.get("tailMessages") || "0", 10) || 0);
 			let state: ApiSessionState;
 			try {
-				state = runtime.getSessionState(sessionId, includeFullHistory);
+				state = runtime.getSessionState(sessionId, includeFullHistory, tailMessages);
 			} catch {
 				return errorResponse("Session not running", 404);
 			}

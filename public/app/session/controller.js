@@ -40,6 +40,10 @@ export function createSessionController({
 	let pendingPrompt = false;
 	let actionBusy = null;
 	const shouldUseFullHistory = Boolean(loadFullHistory);
+	const INITIAL_SESSION_HISTORY_LIMIT = 120;
+	let connectMessageLimit = 0;
+	let historyHydrationTimer = null;
+	let historyHydrationGeneration = 0;
 
 	const chatView = createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt });
 
@@ -50,7 +54,16 @@ export function createSessionController({
 		}
 	}
 
+	function clearHistoryHydration() {
+		historyHydrationGeneration += 1;
+		if (historyHydrationTimer) {
+			clearTimeout(historyHydrationTimer);
+			historyHydrationTimer = null;
+		}
+	}
+
 	function closeEvents() {
+		clearHistoryHydration();
 		if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
 		if (syncStateTimer) { clearInterval(syncStateTimer); syncStateTimer = null; }
 		if (lostSessionTimer) { clearTimeout(lostSessionTimer); lostSessionTimer = null; }
@@ -83,7 +96,11 @@ export function createSessionController({
 		if (!activeSessionId) return false;
 		try {
 			const wantFull = options.fullHistory === true || (!Object.prototype.hasOwnProperty.call(options, "fullHistory") && shouldUseFullHistory && options.syncMessages !== false);
-			const state = await api.getJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/state${wantFull ? "?fullHistory=1" : ""}`);
+			const qs = new URLSearchParams();
+			if (wantFull) qs.set("fullHistory", "1");
+			else if (Number.isFinite(options.tailMessages) && options.tailMessages > 0) qs.set("tailMessages", String(Math.floor(options.tailMessages)));
+			const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
+			const state = await api.getJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/state${suffix}`);
 			activeState = state;
 			lastCliCommand = computeCliCommand(activeState) || lastCliCommand;
 			const shouldSyncMessages = options.syncMessages === true || (options.syncMessages !== false && !state?.isStreaming);
@@ -106,13 +123,38 @@ export function createSessionController({
 		}
 	}
 
-	function connectEvents(sessionId) {
+	function hydrateFullHistory(sessionId) {
+		if (!shouldUseFullHistory || !sessionId) return;
+		clearHistoryHydration();
+		const generation = historyHydrationGeneration;
+		historyHydrationTimer = setTimeout(async () => {
+			historyHydrationTimer = null;
+			try {
+				const state = await api.getJson(`/api/sessions/${encodeURIComponent(sessionId)}/state?fullHistory=1`);
+				if (generation !== historyHydrationGeneration || activeSessionId !== sessionId) return;
+				activeState = state;
+				lastCliCommand = computeCliCommand(activeState) || lastCliCommand;
+				if (state?.isStreaming || pendingPrompt) chatView.syncFromMessages(state?.messages || []);
+				else chatView.replaceFromMessages(state?.messages || []);
+				onStateChange();
+			} catch {
+				// Ignore background hydration failures; the recent tail is already visible.
+			}
+		}, 120);
+	}
+
+	function connectEvents(sessionId, options = {}) {
 		closeEvents();
 		connectGraceUntil = Date.now() + 8000;
+		const messageLimit = Number.isFinite(options.messageLimit) && options.messageLimit > 0
+			? Math.floor(options.messageLimit)
+			: 0;
+		connectMessageLimit = messageLimit;
 
 		const qs = new URLSearchParams({ clientId });
 		if (token) qs.set("token", token);
-		if (shouldUseFullHistory) qs.set("fullHistory", "1");
+		if (messageLimit > 0) qs.set("tailMessages", String(messageLimit));
+		else if (shouldUseFullHistory) qs.set("fullHistory", "1");
 
 		eventSource = new EventSource(`/api/sessions/${encodeURIComponent(sessionId)}/events?${qs.toString()}`);
 		lastEventTime = Date.now();
@@ -265,7 +307,16 @@ export function createSessionController({
 				onCloseMenu();
 				chatView.clear({ discardNotices: true });
 				chatView.renderHistory(activeState.messages || []);
+				if (
+					shouldUseFullHistory
+					&& connectMessageLimit > 0
+					&& Array.isArray(activeState?.messages)
+					&& activeState.messages.length >= connectMessageLimit
+				) {
+					void hydrateFullHistory(activeState?.sessionId || activeSessionId);
+				}
 			}
+			connectMessageLimit = 0;
 			onStateChange();
 			if (!isReconnectInit) chatView.scrollToBottom(true);
 			return;
@@ -487,19 +538,20 @@ export function createSessionController({
 		}
 		// Show loading immediately before any async work
 		chatView.showLoading("Loading session…");
+		onSidebarClose();
 		if (session.isRunning) {
 			try {
 				activeSessionId = session.id;
-				// Connect events and fetch state in parallel with takeover
-				connectEvents(activeSessionId);
+				// Connect first with a recent tail so long sessions paint quickly.
+				connectEvents(activeSessionId, { messageLimit: shouldUseFullHistory ? INITIAL_SESSION_HISTORY_LIMIT : 0 });
 				await Promise.all([
-					api.getJson(`/api/sessions/${encodeURIComponent(session.id)}/state`),
+					api.getJson(`/api/sessions/${encodeURIComponent(session.id)}/state?tailMessages=1`),
 					api.postJson(`/api/sessions/${encodeURIComponent(session.id)}/takeover`, { clientId }).catch(() => {}),
 				]);
-				onSidebarClose();
 				onStateChange();
 				return;
 			} catch (error) {
+				closeEvents();
 				if (!session.path) throw error;
 				// The session was marked running in the sidebar but the live runtime is gone.
 				// Fall back to reopening from disk instead of surfacing a transient load failure.
@@ -512,8 +564,7 @@ export function createSessionController({
 
 		const result = await api.postJson("/api/sessions", { clientId, resumeSessionPath: session.path });
 		activeSessionId = result.sessionId;
-		connectEvents(activeSessionId);
-		onSidebarClose();
+		connectEvents(activeSessionId, { messageLimit: shouldUseFullHistory ? INITIAL_SESSION_HISTORY_LIMIT : 0 });
 		onStateChange();
 	}
 

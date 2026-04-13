@@ -16,8 +16,7 @@ import {
 	type AgentSession,
 	type AgentSessionEvent,
 } from "@mariozechner/pi-coding-agent";
-import { existsSync } from "node:fs";
-import { mkdirSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -731,7 +730,11 @@ function buildMessagesFromSessionBranch(session: AgentSession): AgentMessage[] {
 	return messages;
 }
 
-function buildState(session: AgentSession, cwd: string, includeFullHistory = false, startAgent?: string): ApiSessionState {
+function buildState(session: AgentSession, cwd: string, includeFullHistory = false, startAgent?: string, messageLimit = 0): ApiSessionState {
+	let messages = includeFullHistory ? buildMessagesFromSessionBranch(session) : session.messages;
+	if (messageLimit > 0 && messages.length > messageLimit) {
+		messages = messages.slice(-messageLimit);
+	}
 	return {
 		sessionId: session.sessionId,
 		cwd,
@@ -745,7 +748,7 @@ function buildState(session: AgentSession, cwd: string, includeFullHistory = fal
 		followUpMode: session.followUpMode,
 		stats: safeStatsSnapshot(session),
 		contextUsage: safeContextUsageSnapshot(session),
-		messages: includeFullHistory ? buildMessagesFromSessionBranch(session) : session.messages,
+		messages,
 		commands: safeCommandsSnapshot(session),
 	};
 }
@@ -778,6 +781,42 @@ async function ensureDirectory(path: string): Promise<void> {
 
 function normalizeCwd(input: string): string {
 	return resolve(input.trim());
+}
+
+function readSessionHeaderCwd(path: string): string | null {
+	let fd: number | null = null;
+	try {
+		fd = openSync(path, "r");
+		const chunk = Buffer.alloc(4096);
+		let text = "";
+		let position = 0;
+		while (!text.includes("\n") && position < 64 * 1024) {
+			const bytesRead = readSync(fd, chunk, 0, chunk.length, position);
+			if (bytesRead <= 0) break;
+			text += chunk.subarray(0, bytesRead).toString("utf8");
+			position += bytesRead;
+		}
+		const firstLine = text.split(/\r?\n/, 1)[0]?.trim();
+		if (!firstLine) return null;
+		const header = JSON.parse(firstLine);
+		return header && header.type === "session" && typeof header.cwd === "string"
+			? header.cwd
+			: null;
+	} catch {
+		return null;
+	} finally {
+		if (fd !== null) {
+			try { closeSync(fd); } catch {}
+		}
+	}
+}
+
+function openSessionManagerFast(path: string, sessionDir?: string): SessionManager {
+	const resolvedPath = resolve(path);
+	const dir = sessionDir ?? dirname(resolvedPath);
+	const cwd = readSessionHeaderCwd(resolvedPath) ?? process.cwd();
+	const SessionManagerCtor = SessionManager as unknown as new (cwd: string, sessionDir: string, sessionFile: string, persist: boolean) => SessionManager;
+	return new SessionManagerCtor(cwd, dir, resolvedPath, true);
 }
 
 function serializeSessionSummary(entry: {
@@ -1262,12 +1301,12 @@ export class PiWebRuntime {
 		}));
 	}
 
-	getSessionState(sessionId: string, includeFullHistory = false): ApiSessionState {
+	getSessionState(sessionId: string, includeFullHistory = false, messageLimit = 0): ApiSessionState {
 		const runtime = this.runningById.get(sessionId);
 		if (!runtime) {
 			throw new Error("session_not_running");
 		}
-		return buildState(runtime.session, runtime.cwd, includeFullHistory, runtime.startAgent);
+		return buildState(runtime.session, runtime.cwd, includeFullHistory, runtime.startAgent, messageLimit);
 	}
 
 	getSessionTree(sessionId: string): ApiSessionTreeResponse {
@@ -1355,7 +1394,7 @@ export class PiWebRuntime {
 			sessionManager.newSession({ parentSession: currentSessionFile });
 			forkedSessionPath = sessionManager.getSessionFile();
 		} else {
-			const sourceManager = SessionManager.open(currentSessionFile, sessionDir);
+			const sourceManager = openSessionManagerFast(currentSessionFile, sessionDir);
 			forkedSessionPath = sourceManager.createBranchedSession(selectedEntry.parentId);
 		}
 
@@ -1415,7 +1454,7 @@ export class PiWebRuntime {
 				throw new Error(`session file does not exist: ${path}`);
 			}
 
-			const sessionManager = SessionManager.open(path);
+			const sessionManager = openSessionManagerFast(path);
 			const cwd = sessionManager.getCwd();
 			const { session, startAgentConfig } = await createSessionWithWorktreeGuard({
 				cwd,
