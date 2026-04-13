@@ -22,6 +22,8 @@ export function parseAssistantContent(content) {
 		if (!block || typeof block !== "object") continue;
 		if (block.type === "thinking" && typeof block.thinking === "string") {
 			result.thinking += block.thinking;
+		} else if (block.type === "reasoning" && typeof block.reasoning === "string") {
+			result.thinking += block.reasoning;
 		} else if (block.type === "text" && typeof block.text === "string") {
 			result.text += block.text;
 		} else if (block.type === "toolCall" && typeof block.id === "string" && typeof block.name === "string") {

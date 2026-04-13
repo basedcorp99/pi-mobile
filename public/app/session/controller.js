@@ -40,7 +40,7 @@ export function createSessionController({
 	let pendingPrompt = false;
 	let actionBusy = null;
 	const shouldUseFullHistory = Boolean(loadFullHistory);
-	const INITIAL_SESSION_HISTORY_LIMIT = 20;
+	const INITIAL_SESSION_HISTORY_LIMIT = 10;
 	let connectMessageLimit = 0;
 	let historyHydrationTimer = null;
 	let historyHydrationGeneration = 0;

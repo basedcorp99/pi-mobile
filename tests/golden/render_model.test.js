@@ -307,5 +307,13 @@ describe("golden: render model", () => {
 			errorMessage: "tool failed",
 		})).toBeNull();
 	});
+
+	test("assistant content treats reasoning blocks like thinking", () => {
+		expect(parseAssistantContent([
+			{ type: "reasoning", reasoning: "step one" },
+			{ type: "thinking", thinking: " step two" },
+			{ type: "text", text: "answer" },
+		])).toEqual({ thinking: "step one step two", text: "answer", toolCalls: [] });
+	});
 });
 

@@ -384,7 +384,42 @@ function summarizeContentForFastSessionPreview(content: unknown): string {
 
 	const textParts: string[] = [];
 	let imageCount = 0;
-	let omittedThinking = false;
+
+	for (const block of content) {
+		if (!block || typeof block !== "object") continue;
+		const typedBlock = block as {
+			type?: unknown;
+			text?: unknown;
+			data?: unknown;
+		};
+		if (typedBlock.type === "text" && typeof typedBlock.text === "string") {
+			textParts.push(typedBlock.text);
+			continue;
+		}
+		if (typedBlock.type === "image" && typeof typedBlock.data === "string") {
+			imageCount += 1;
+		}
+	}
+
+	let text = textParts.join("\n").trim();
+	if (imageCount > 0) {
+		text += `${text ? "\n\n" : ""}[${imageCount} image${imageCount === 1 ? "" : "s"} omitted for fast session loading]`;
+	}
+	if (!text) {
+		text = "(content omitted for fast session loading)";
+	}
+	return truncateFastPreviewText(text);
+}
+
+function summarizeAssistantContentForFastSessionPreview(content: unknown): unknown {
+	if (typeof content === "string") {
+		const preview = truncateFastPreviewText(content);
+		return preview || "(content omitted for fast session loading)";
+	}
+	if (!Array.isArray(content)) return "(content omitted for fast session loading)";
+
+	const previewBlocks: Record<string, unknown>[] = [];
+	let imageCount = 0;
 
 	for (const block of content) {
 		if (!block || typeof block !== "object") continue;
@@ -396,45 +431,50 @@ function summarizeContentForFastSessionPreview(content: unknown): string {
 			reasoning?: unknown;
 		};
 		if (typedBlock.type === "text" && typeof typedBlock.text === "string") {
-			textParts.push(typedBlock.text);
+			const previewText = truncateFastPreviewText(typedBlock.text);
+			if (previewText) previewBlocks.push({ ...(block as Record<string, unknown>), text: previewText });
+			continue;
+		}
+		if (typedBlock.type === "thinking" && typeof typedBlock.thinking === "string") {
+			const previewThinking = truncateFastPreviewText(typedBlock.thinking);
+			if (previewThinking) previewBlocks.push({ ...(block as Record<string, unknown>), thinking: previewThinking });
+			continue;
+		}
+		if (typedBlock.type === "reasoning" && typeof typedBlock.reasoning === "string") {
+			const previewReasoning = truncateFastPreviewText(typedBlock.reasoning);
+			if (previewReasoning) previewBlocks.push({ ...(block as Record<string, unknown>), reasoning: previewReasoning });
 			continue;
 		}
 		if (typedBlock.type === "image" && typeof typedBlock.data === "string") {
 			imageCount += 1;
 			continue;
 		}
-		if (
-			(typedBlock.type === "thinking" || typedBlock.type === "reasoning") &&
-			(typeof typedBlock.thinking === "string" || typeof typedBlock.reasoning === "string")
-		) {
-			omittedThinking = true;
-		}
+		previewBlocks.push({ ...(block as Record<string, unknown>) });
 	}
 
-	let text = textParts.join("\n").trim();
 	if (imageCount > 0) {
-		text += `${text ? "\n\n" : ""}[${imageCount} image${imageCount === 1 ? "" : "s"} omitted for fast session loading]`;
+		previewBlocks.push({
+			type: "text",
+			text: `[${imageCount} image${imageCount === 1 ? "" : "s"} omitted for fast session loading]`,
+		});
 	}
-	if (!text && omittedThinking) {
-		text = "[thinking omitted for fast session loading]";
-	}
-	if (!text) {
-		text = "(content omitted for fast session loading)";
-	}
-	return truncateFastPreviewText(text);
+
+	return previewBlocks.length > 0 ? previewBlocks : "(content omitted for fast session loading)";
 }
 
 function makeFastSessionPreviewMessage(message: AgentMessage): AgentMessage {
 	if (!message || typeof message !== "object") return message;
 	const role = (message as { role?: unknown }).role;
-	const preview = { ...(message as Record<string, unknown>) };
+	const preview: Record<string, unknown> = { ...(message as unknown as Record<string, unknown>) };
 	if (Object.prototype.hasOwnProperty.call(preview, "content")) {
-		preview.content = summarizeContentForFastSessionPreview(preview.content);
+		preview.content = role === "assistant"
+			? summarizeAssistantContentForFastSessionPreview(preview.content)
+			: summarizeContentForFastSessionPreview(preview.content);
 	}
 	if (role === "toolResult") {
 		preview.details = undefined;
 	}
-	return preview as AgentMessage;
+	return preview as unknown as AgentMessage;
 }
 
 function makeFastSessionPreviewMessages(messages: AgentMessage[]): AgentMessage[] {
