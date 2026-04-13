@@ -15,12 +15,14 @@ import {
 	getToken,
 	getVoiceInputMode,
 	getVoiceTranscriptionMode,
+	getLastVoiceTranscript,
 	setFontScalePreference,
 	setSendOnEnterEnabled,
 	setStreamingSendMode,
 	setThemePreference,
 	setVoiceInputMode,
 	setVoiceTranscriptionMode,
+	setLastVoiceTranscript,
 } from "./core/storage.js";
 import { createSessionController } from "./session/controller.js";
 import { extractTextContent } from "./session/content.js";
@@ -74,6 +76,7 @@ const btnAttach = document.getElementById("btn-attach");
 const LOAD_FULL_SESSION_HISTORY = true;
 
 const btnHistory = document.getElementById("btn-history");
+const btnLastVoice = document.getElementById("btn-last-voice");
 const btnVoice = document.getElementById("btn-voice");
 const btnAttachClear = document.getElementById("btn-attach-clear");
 const attachList = document.getElementById("attach-list");
@@ -585,16 +588,72 @@ function handleQueuedVoiceJob(job) {
 
 function appendTranscriptToComposer(text) {
 	if (typeof text !== "string" || !text.trim() || input.disabled) return false;
+	const transcript = text.trim();
 	const before = input.value;
-	input.value = before ? `${before} ${text}` : text;
+	const trimmedBefore = before.trimEnd();
+	if (trimmedBefore === transcript || trimmedBefore.endsWith(` ${transcript}`) || trimmedBefore.endsWith(`\n${transcript}`)) {
+		input.focus();
+		return true;
+	}
+	input.value = before ? `${before} ${transcript}` : transcript;
 	autoResize(input);
 	input.focus();
 	return true;
 }
 
+function formatSavedVoiceTime(updatedAt) {
+	const ms = Number(updatedAt || 0);
+	if (!Number.isFinite(ms) || ms <= 0) return "";
+	try {
+		return new Intl.DateTimeFormat(undefined, {
+			month: "short",
+			day: "numeric",
+			hour: "numeric",
+			minute: "2-digit",
+		}).format(new Date(ms));
+	} catch {
+		return "";
+	}
+}
+
+function rememberLastVoiceTranscript(text, job = null) {
+	const transcript = typeof text === "string" ? text.trim() : "";
+	if (!transcript) return;
+	const sessionId = typeof job?.sessionId === "string" && job.sessionId.trim()
+		? job.sessionId.trim()
+		: sessionCtrl?.getActiveSessionId?.() || "";
+	setLastVoiceTranscript({
+		text: transcript,
+		updatedAt: Date.now(),
+		sessionId,
+		mode: normalizeVoiceInputMode(job?.mode),
+	});
+	updateAttachmentControls();
+}
+
+function restoreLastVoiceTranscript() {
+	const saved = getLastVoiceTranscript();
+	if (!saved?.text) {
+		sessionCtrl?.appendNotice?.("No saved voice transcript yet.", "warning");
+		return false;
+	}
+	if (input.disabled) {
+		sessionCtrl?.appendNotice?.("Take over the session first to insert the saved voice transcript.", "warning");
+		return false;
+	}
+	resetPromptHistoryNavigation();
+	const inserted = appendTranscriptToComposer(saved.text);
+	if (inserted) {
+		const when = formatSavedVoiceTime(saved.updatedAt);
+		sessionCtrl?.appendNotice?.(when ? `Inserted last voice transcript from ${when}.` : "Inserted last voice transcript.", "info");
+	}
+	return inserted;
+}
+
 async function handleVoiceTranscription(text, job = null) {
 	const transcript = typeof text === "string" ? text.trim() : "";
 	if (!transcript) return false;
+	rememberLastVoiceTranscript(transcript, job);
 	const mode = normalizeVoiceInputMode(job?.mode);
 	if (mode === VOICE_INPUT_MODE_AUTO_SEND) {
 		const sessionId = typeof job?.sessionId === "string" && job.sessionId.trim()
@@ -635,6 +694,15 @@ function updateAttachmentControls() {
 		else if (voiceRecorder?.isTranscribing?.()) btnVoice.title = "Transcribing…";
 		else if (voiceRecorder?.isRecording?.()) btnVoice.title = voiceRecordingMode === "hold" ? "Release to stop" : "Tap to stop";
 		else btnVoice.title = voiceInputMode === VOICE_INPUT_MODE_AUTO_SEND ? "Tap or hold to record and auto-send" : "Tap or hold to record";
+	}
+	if (btnLastVoice) {
+		const saved = getLastVoiceTranscript();
+		const when = saved ? formatSavedVoiceTime(saved.updatedAt) : "";
+		btnLastVoice.hidden = !saved;
+		btnLastVoice.disabled = disabled || !saved;
+		btnLastVoice.title = saved
+			? (when ? `Insert the last saved voice transcript from ${when}` : "Insert the last saved voice transcript")
+			: "No saved voice transcript yet";
 	}
 	if (btnAttachClear) btnAttachClear.disabled = disabled || pendingAttachments.length === 0;
 	if (imageInput) imageInput.disabled = disabled;
@@ -1195,6 +1263,7 @@ btnRelease.addEventListener("click", () => {
 });
 if (btnAttach) btnAttach.addEventListener("click", () => imageInput?.click());
 if (btnHistory) btnHistory.addEventListener("click", () => openPromptHistoryDialog());
+if (btnLastVoice) btnLastVoice.addEventListener("click", () => { restoreLastVoiceTranscript(); });
 if (btnVoice) {
 	let pressActive = false;
 	let holdStarting = false;

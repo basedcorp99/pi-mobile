@@ -112,6 +112,35 @@ export function setVoiceTranscriptionMode(mode) {
 	safeLocalStorageSet("piWebVoiceTranscriptionMode", mode === "web-speech" ? "web-speech" : "parakeet");
 }
 
+export function getLastVoiceTranscript() {
+	const raw = safeLocalStorageGet("piWebLastVoiceTranscript");
+	if (!raw) return null;
+	try {
+		const parsed = JSON.parse(raw);
+		const text = typeof parsed?.text === "string" ? parsed.text.trim() : "";
+		if (!text) return null;
+		return {
+			text,
+			updatedAt: typeof parsed?.updatedAt === "number" ? parsed.updatedAt : 0,
+			sessionId: typeof parsed?.sessionId === "string" ? parsed.sessionId : "",
+			mode: parsed?.mode === "auto-send" ? "auto-send" : "compose",
+		};
+	} catch {
+		return null;
+	}
+}
+
+export function setLastVoiceTranscript(value) {
+	const text = typeof value?.text === "string" ? value.text.trim() : "";
+	if (!text) return;
+	safeLocalStorageSet("piWebLastVoiceTranscript", JSON.stringify({
+		text,
+		updatedAt: typeof value?.updatedAt === "number" ? value.updatedAt : Date.now(),
+		sessionId: typeof value?.sessionId === "string" ? value.sessionId : "",
+		mode: value?.mode === "auto-send" ? "auto-send" : "compose",
+	}));
+}
+
 export function getStreamingSendMode() {
 	return safeLocalStorageGet("piWebStreamingSendMode") === "followUp" ? "followUp" : "steer";
 }
