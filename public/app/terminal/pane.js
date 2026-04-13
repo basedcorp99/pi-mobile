@@ -425,8 +425,8 @@ export function createTerminalPane({
 		const closeBtn = document.createElement("button")
 		closeBtn.className = "terminal-tab-close"
 		closeBtn.type = "button"
-		closeBtn.textContent = "✕"
 		closeBtn.title = "Close terminal tab"
+		closeBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>'
 		buttonEl.appendChild(iconEl)
 		buttonEl.appendChild(labelEl)
 		buttonEl.appendChild(closeBtn)
@@ -579,6 +579,10 @@ export function createTerminalPane({
 		}
 		renderEmptyState()
 		renderStatus()
+		// Hide terminal pane when last tab is closed
+		if (state.tabs.size === 0) {
+			setOpen(false, { focus: false })
+		}
 	}
 
 	function handleServerError(message) {

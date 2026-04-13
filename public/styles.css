@@ -991,10 +991,10 @@
       padding-bottom: 8px;
     }
     .terminal-tab-add {
-      color: #b9c3d2;
+      color: #8899aa;
     }
     .terminal-tab-add:hover {
-      background: rgba(255,255,255,.06);
+      background: rgba(255,255,255,.12);
       color: #fff;
     }
     .terminal-head-btn {
@@ -1025,13 +1025,12 @@
     }
     .terminal-head-btn.accent:hover { background: #9fe3db; color: #0a0d12; }
     .terminal-head-icon-btn {
-      width: 32px;
-      min-width: 32px;
+      width: 28px;
+      min-width: 28px;
+      height: 28px;
       padding: 0;
       gap: 0;
-      border-bottom: 1px solid rgba(255,255,255,.08);
-      align-self: flex-end;
-      margin-bottom: 8px;
+      align-self: center;
       flex: 0 0 auto;
       flex-shrink: 0;
     }
@@ -1041,7 +1040,11 @@
       height: 14px;
     }
     .terminal-close-btn {
-      color: #c2cad8;
+      color: #8899aa;
+    }
+    .terminal-close-btn:hover {
+      color: #fff;
+      background: rgba(255,255,255,.12);
     }
     .terminal-tabs {
       display: flex;
@@ -1114,8 +1117,9 @@
       border: none;
       background: transparent;
       color: inherit;
-      width: 16px;
-      height: 16px;
+      width: 20px;
+      height: 20px;
+      padding: 0;
       border-radius: 5px;
       cursor: pointer;
       display: inline-flex;
@@ -1123,8 +1127,12 @@
       justify-content: center;
       opacity: .5;
       flex-shrink: 0;
-      font-size: 11px;
       transition: background .15s ease, opacity .15s ease;
+    }
+    .terminal-tab-close svg {
+      display: block;
+      width: 10px;
+      height: 10px;
     }
     .terminal-tab:hover .terminal-tab-close,
     .terminal-tab.active .terminal-tab-close { opacity: .82; }
@@ -2607,6 +2615,15 @@
     body.light .terminal-head-btn.accent:hover {
       background: var(--accent-strong);
       color: #fff;
+    }
+    body.light .terminal-close-btn {
+      border-color: rgba(0,0,0,.08);
+      background: rgba(255,255,255,.62);
+      color: #556070;
+    }
+    body.light .terminal-close-btn:hover {
+      background: rgba(0,0,0,.08);
+      color: var(--text-primary);
     }
     body.light .terminal-tab-add {
       border-color: rgba(0,0,0,.08);
