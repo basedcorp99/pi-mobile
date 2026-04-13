@@ -866,10 +866,11 @@ function buildMessagesFromSessionBranch(session: AgentSession): AgentMessage[] {
 function buildState(session: AgentSession, cwd: string, includeFullHistory = false, startAgent?: string, messageLimit = 0): ApiSessionState {
 	let messages = includeFullHistory ? buildMessagesFromSessionBranch(session) : session.messages;
 	if (messageLimit > 0 && messages.length > messageLimit) {
+		// `tailMessages` is only meant to bound how many messages we send on
+		// initial session load. Never rewrite message content into preview text,
+		// or placeholders like `[truncated for fast session loading]` can leak
+		// into the actual chat transcript shown to the user.
 		messages = messages.slice(-messageLimit);
-	}
-	if (messageLimit > 0) {
-		messages = makeFastSessionPreviewMessages(messages);
 	}
 	return {
 		sessionId: session.sessionId,
