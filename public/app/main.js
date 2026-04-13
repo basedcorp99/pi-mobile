@@ -73,7 +73,9 @@ const btnAbortTxt = btnAbort?.querySelector?.(".txt") || null;
 const btnCompactTxt = btnCompact?.querySelector?.(".txt") || null;
 const btnReleaseTxt = btnRelease?.querySelector?.(".txt") || null;
 const btnAttach = document.getElementById("btn-attach");
-const LOAD_FULL_SESSION_HISTORY = true;
+// Keep session switching snappy on mobile by loading a recent tail first.
+// Full-history hydration can be re-enabled later if we add an explicit on-demand UI.
+const LOAD_FULL_SESSION_HISTORY = false;
 
 const btnHistory = document.getElementById("btn-history");
 const btnLastVoice = document.getElementById("btn-last-voice");

@@ -40,10 +40,14 @@ export function createSessionController({
 	let pendingPrompt = false;
 	let actionBusy = null;
 	const shouldUseFullHistory = Boolean(loadFullHistory);
-	const INITIAL_SESSION_HISTORY_LIMIT = 120;
+	const INITIAL_SESSION_HISTORY_LIMIT = 20;
 	let connectMessageLimit = 0;
 	let historyHydrationTimer = null;
 	let historyHydrationGeneration = 0;
+
+	function getInitialMessageLimit() {
+		return INITIAL_SESSION_HISTORY_LIMIT;
+	}
 
 	const chatView = createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt });
 
@@ -97,8 +101,11 @@ export function createSessionController({
 		try {
 			const wantFull = options.fullHistory === true || (!Object.prototype.hasOwnProperty.call(options, "fullHistory") && shouldUseFullHistory && options.syncMessages !== false);
 			const qs = new URLSearchParams();
+			const explicitTailMessages = Number.isFinite(options.tailMessages) && options.tailMessages > 0
+				? Math.floor(options.tailMessages)
+				: 0;
 			if (wantFull) qs.set("fullHistory", "1");
-			else if (Number.isFinite(options.tailMessages) && options.tailMessages > 0) qs.set("tailMessages", String(Math.floor(options.tailMessages)));
+			else if (explicitTailMessages > 0) qs.set("tailMessages", String(explicitTailMessages));
 			const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
 			const state = await api.getJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/state${suffix}`);
 			activeState = state;
@@ -180,7 +187,7 @@ export function createSessionController({
 				return;
 			}
 			if (Date.now() - lastEventTime > 15_000) {
-				connectEvents(activeSessionId);
+				connectEvents(activeSessionId, { messageLimit: getInitialMessageLimit() });
 			}
 		};
 
@@ -197,7 +204,7 @@ export function createSessionController({
 					return;
 				}
 				void refreshState({ silent: true, syncMessages: false }).finally(() => {
-					if (activeSessionId) connectEvents(activeSessionId);
+					if (activeSessionId) connectEvents(activeSessionId, { messageLimit: getInitialMessageLimit() });
 				});
 			}
 		}, 6_000);
@@ -242,7 +249,7 @@ export function createSessionController({
 			if (!activeSessionId || document.visibilityState !== "visible" || generation !== resumeGeneration) return;
 			void refreshState({ silent: true, syncMessages: false }).finally(() => {
 				if (!activeSessionId || document.visibilityState !== "visible" || generation !== resumeGeneration) return;
-				connectEvents(activeSessionId);
+				connectEvents(activeSessionId, { messageLimit: getInitialMessageLimit() });
 				clearResumeTimer();
 				resumeTimer = setTimeout(() => {
 					resumeTimer = null;
@@ -543,7 +550,7 @@ export function createSessionController({
 			try {
 				activeSessionId = session.id;
 				// Connect first with a recent tail so long sessions paint quickly.
-				connectEvents(activeSessionId, { messageLimit: shouldUseFullHistory ? INITIAL_SESSION_HISTORY_LIMIT : 0 });
+				connectEvents(activeSessionId, { messageLimit: getInitialMessageLimit() });
 				await Promise.all([
 					api.getJson(`/api/sessions/${encodeURIComponent(session.id)}/state?tailMessages=1`),
 					api.postJson(`/api/sessions/${encodeURIComponent(session.id)}/takeover`, { clientId }).catch(() => {}),
@@ -564,7 +571,7 @@ export function createSessionController({
 
 		const result = await api.postJson("/api/sessions", { clientId, resumeSessionPath: session.path });
 		activeSessionId = result.sessionId;
-		connectEvents(activeSessionId, { messageLimit: shouldUseFullHistory ? INITIAL_SESSION_HISTORY_LIMIT : 0 });
+		connectEvents(activeSessionId, { messageLimit: getInitialMessageLimit() });
 		onStateChange();
 	}
 
@@ -922,7 +929,7 @@ export function createSessionController({
 	async function reconnectTransport() {
 		if (!activeSessionId) return;
 		closeEvents();
-		connectEvents(activeSessionId);
+		connectEvents(activeSessionId, { messageLimit: getInitialMessageLimit() });
 		await refreshState({ silent: true, syncMessages: false });
 	}
 
@@ -1003,7 +1010,7 @@ export function createSessionController({
 	function openSessionId(sessionId) {
 		actionBusy = null;
 		activeSessionId = sessionId;
-		connectEvents(activeSessionId);
+		connectEvents(activeSessionId, { messageLimit: getInitialMessageLimit() });
 		onStateChange();
 	}
 

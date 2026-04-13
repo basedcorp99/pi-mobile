@@ -348,6 +348,93 @@ function compactPreview(text: string, max = 140): string {
 	return normalized.length > max ? `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}…` : normalized;
 }
 
+const FAST_SESSION_PREVIEW_MAX_CHARS = 4_000;
+const FAST_SESSION_PREVIEW_MAX_LINES = 80;
+
+function truncateFastPreviewText(input: string, maxChars = FAST_SESSION_PREVIEW_MAX_CHARS, maxLines = FAST_SESSION_PREVIEW_MAX_LINES): string {
+	const text = String(input ?? "");
+	if (!text) return "";
+	const lines = text.split("\n");
+	const limitedLines = lines.slice(0, maxLines);
+	let output = limitedLines.join("\n");
+	const truncatedByLines = limitedLines.length < lines.length;
+	let truncatedByChars = false;
+	if (output.length > maxChars) {
+		output = output.slice(0, maxChars);
+		truncatedByChars = true;
+	}
+	if (truncatedByLines || truncatedByChars) {
+		output = `${output.trimEnd()}\n\n[truncated for fast session loading]`;
+	}
+	return output;
+}
+
+function summarizeContentForFastSessionPreview(content: unknown): string {
+	if (typeof content === "string") {
+		const preview = truncateFastPreviewText(content);
+		return preview || "(content omitted for fast session loading)";
+	}
+	if (!Array.isArray(content)) return "(content omitted for fast session loading)";
+
+	const textParts: string[] = [];
+	let imageCount = 0;
+	let omittedThinking = false;
+
+	for (const block of content) {
+		if (!block || typeof block !== "object") continue;
+		const typedBlock = block as {
+			type?: unknown;
+			text?: unknown;
+			data?: unknown;
+			thinking?: unknown;
+			reasoning?: unknown;
+		};
+		if (typedBlock.type === "text" && typeof typedBlock.text === "string") {
+			textParts.push(typedBlock.text);
+			continue;
+		}
+		if (typedBlock.type === "image" && typeof typedBlock.data === "string") {
+			imageCount += 1;
+			continue;
+		}
+		if (
+			(typedBlock.type === "thinking" || typedBlock.type === "reasoning") &&
+			(typeof typedBlock.thinking === "string" || typeof typedBlock.reasoning === "string")
+		) {
+			omittedThinking = true;
+		}
+	}
+
+	let text = textParts.join("\n").trim();
+	if (imageCount > 0) {
+		text += `${text ? "\n\n" : ""}[${imageCount} image${imageCount === 1 ? "" : "s"} omitted for fast session loading]`;
+	}
+	if (!text && omittedThinking) {
+		text = "[thinking omitted for fast session loading]";
+	}
+	if (!text) {
+		text = "(content omitted for fast session loading)";
+	}
+	return truncateFastPreviewText(text);
+}
+
+function makeFastSessionPreviewMessage(message: AgentMessage): AgentMessage {
+	if (!message || typeof message !== "object") return message;
+	const role = (message as { role?: unknown }).role;
+	const preview = { ...(message as Record<string, unknown>) };
+	if (Object.prototype.hasOwnProperty.call(preview, "content")) {
+		preview.content = summarizeContentForFastSessionPreview(preview.content);
+	}
+	if (role === "toolResult") {
+		preview.details = undefined;
+	}
+	return preview as AgentMessage;
+}
+
+function makeFastSessionPreviewMessages(messages: AgentMessage[]): AgentMessage[] {
+	return messages.map((message) => makeFastSessionPreviewMessage(message));
+}
+
 function describeSessionTreeEntry(entry: any): Pick<ApiSessionTreeEntry, "type" | "role" | "title" | "preview" | "isUserMessage" | "canFork"> {
 	if (!entry || typeof entry !== "object") {
 		return { type: "unknown", title: "Entry", preview: "", isUserMessage: false, canFork: false };
@@ -734,6 +821,9 @@ function buildState(session: AgentSession, cwd: string, includeFullHistory = fal
 	let messages = includeFullHistory ? buildMessagesFromSessionBranch(session) : session.messages;
 	if (messageLimit > 0 && messages.length > messageLimit) {
 		messages = messages.slice(-messageLimit);
+	}
+	if (messageLimit > 0) {
+		messages = makeFastSessionPreviewMessages(messages);
 	}
 	return {
 		sessionId: session.sessionId,
