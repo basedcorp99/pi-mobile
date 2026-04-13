@@ -29,6 +29,7 @@ import { createAskDialog } from "./ui/ask_dialog.js?v=1775350601";
 import { createUiPromptDialog } from "./ui/ui_prompt_dialog.js";
 import { createAgentLauncher } from "./ui/agent_launcher.js";
 import { createReviewLauncher } from "./ui/review_launcher.js";
+import { createSessionBranchLauncher } from "./ui/session_branch_launcher.js";
 import { createSidebar } from "./ui/sidebar.js";
 
 function haptic(ms = 10) { try { navigator.vibrate?.(ms); } catch {} }
@@ -42,7 +43,8 @@ const workingSpin = document.getElementById("work-spin");
 const workingText = document.querySelector("#working .work-text");
 
 const footerLine1 = document.getElementById("footer-line-1");
-const footerLeft2 = document.getElementById("footer-left-2");
+const footerCwd = document.getElementById("footer-cwd");
+const footerMetrics = document.getElementById("footer-metrics");
 const footerRight2 = document.getElementById("footer-right-2");
 
 const rolePill = document.getElementById("role-pill");
@@ -132,12 +134,14 @@ let askDialog = null;
 let uiPromptDialog = null;
 let agentLauncher = null;
 let reviewLauncher = null;
+let branchLauncher = null;
 let pendingAttachments = [];
 const pendingPromptHistoryBySession = new Map();
 let promptHistoryCursor = -1;
 let promptHistoryDraft = "";
 let promptHistorySessionId = null;
 let lastComposerSessionId = null;
+let lastBranchLauncherSessionId = null;
 const sessionDrafts = new Map(); // sessionId → draft text
 
 function syncSessionUrl(sessionId) {
@@ -203,6 +207,54 @@ function setComposerText(text) {
 	input.focus();
 	const end = input.value.length;
 	if (typeof input.setSelectionRange === "function") input.setSelectionRange(end, end);
+}
+
+function getBranchLauncherAvailability(kind) {
+	if (!branchLauncher) return { ok: false, message: "Branch navigation is still loading." };
+	const sessionId = sessionCtrl?.getActiveSessionId?.();
+	if (!sessionId) return { ok: false, message: "Open a session first." };
+	const state = sessionCtrl?.getActiveState?.();
+	if (state?.isStreaming) {
+		return { ok: false, message: `Wait for the current response to finish before using /${kind}.` };
+	}
+	const messages = Array.isArray(state?.messages) ? state.messages : [];
+	if (kind === "tree" && messages.length === 0) {
+		return { ok: false, message: "This session has no history yet." };
+	}
+	if (kind === "fork" && !messages.some((message) => message && message.role === "user")) {
+		return { ok: false, message: "There are no user messages to fork from yet." };
+	}
+	return { ok: true };
+}
+
+function openTreeLauncher(options = {}) {
+	const availability = getBranchLauncherAvailability("tree");
+	if (!availability.ok) {
+		if (availability.message) sessionCtrl?.appendNotice?.(availability.message, "warning");
+		return false;
+	}
+	branchLauncher.showTree(options);
+	return true;
+}
+
+function openForkLauncher(options = {}) {
+	const availability = getBranchLauncherAvailability("fork");
+	if (!availability.ok) {
+		if (availability.message) sessionCtrl?.appendNotice?.(availability.message, "warning");
+		return false;
+	}
+	branchLauncher.showFork(options);
+	return true;
+}
+
+function handleLauncherSlashCommand(text) {
+	const match = String(text || "").trim().match(/^\/(tree|fork)(?:\s+(.*))?$/i);
+	if (!match) return { matched: false, opened: false };
+	const kind = String(match[1] || "").toLowerCase();
+	const initialQuery = String(match[2] || "").trim();
+	if (kind === "tree") return { matched: true, opened: openTreeLauncher({ initialQuery }) };
+	if (kind === "fork") return { matched: true, opened: openForkLauncher({ initialQuery }) };
+	return { matched: false, opened: false };
 }
 
 function resetPromptHistoryNavigation() {
@@ -391,11 +443,35 @@ function buildSessionMetrics(state) {
 	return parts.join(" ");
 }
 
+function shortPath(cwd) {
+	if (!cwd) return "";
+	return String(cwd).replace(/^\/root\//, "~/").replace(/^\/home\/[^/]+\//, "~/");
+}
+
+function extractWorktreeName(cwd) {
+	const match = String(cwd || "").match(/\/\.worktrees\/worktree-(.+)$/);
+	return match ? match[1] : null;
+}
+
+function formatFooterCwd(cwd) {
+	const text = String(cwd || "");
+	if (!text) return "";
+	const wtName = extractWorktreeName(text);
+	if (!wtName) return shortPath(text);
+	const repoMatch = text.match(/^(.+)\/\.worktrees\//);
+	const repoRoot = repoMatch ? repoMatch[1] : "";
+	return repoRoot ? `${shortPath(repoRoot)} • 🌿 ${wtName}` : `🌿 ${wtName}`;
+}
+
 function updateFooter() {
 	const activeState = sessionCtrl.getActiveState();
 	if (!activeState) {
 		footerLine1.textContent = "";
-		footerLeft2.textContent = "—";
+		if (footerCwd) {
+			footerCwd.textContent = "";
+			footerCwd.title = "";
+		}
+		if (footerMetrics) footerMetrics.textContent = "—";
 		footerRight2.textContent = "—";
 		return;
 	}
@@ -404,11 +480,16 @@ function updateFooter() {
 
 	const model = activeState.model ? `${activeState.model.provider}/${activeState.model.id}` : "(no model)";
 	const metrics = buildSessionMetrics(activeState);
-	const leftParts = [];
-	if (activeState.cwd) leftParts.push(activeState.cwd);
-	if (metrics) leftParts.push(metrics);
-	leftParts.push(activeState.sessionId.slice(0, 8));
-	footerLeft2.textContent = leftParts.join(" • ");
+	if (footerCwd) {
+		footerCwd.textContent = formatFooterCwd(activeState.cwd || "");
+		footerCwd.title = activeState.cwd || "";
+	}
+	if (footerMetrics) {
+		const metaParts = [];
+		if (metrics) metaParts.push(metrics);
+		if (activeState.sessionId) metaParts.push(activeState.sessionId.slice(0, 8));
+		footerMetrics.textContent = metaParts.join(" • ") || "—";
+	}
 	const agentPart = activeState.startAgent ? `${activeState.startAgent} • ` : "";
 	footerRight2.textContent = `${agentPart}${model} • ${activeState.thinkingLevel}`;
 }
@@ -694,6 +775,15 @@ async function sendPromptFromInput() {
 	const text = input.value;
 	const images = pendingAttachments.map((attachment) => attachment.content);
 	if (!text.trim() && images.length === 0) return false;
+	const launcherCommand = handleLauncherSlashCommand(text);
+	if (launcherCommand.matched) {
+		if (launcherCommand.opened) {
+			resetPromptHistoryNavigation();
+			input.value = "";
+			autoResize(input);
+		}
+		return launcherCommand.opened;
+	}
 	haptic();
 	const snapshot = pendingAttachments.slice();
 	const sessionId = sessionCtrl.getActiveSessionId();
@@ -729,6 +819,8 @@ function closeOpenOverlays() {
 		menuCtrl?.close?.();
 		uiPromptDialog?.close?.();
 		agentLauncher?.close?.();
+		reviewLauncher?.close?.();
+		branchLauncher?.close?.();
 		closed = true;
 	}
 	if (sidebar?.classList?.contains("open")) {
@@ -750,7 +842,12 @@ const sessionCtrl = createSessionController({
 	token,
 	isPhoneLikeFn: isPhoneLike,
 	onStateChange: () => {
-		syncSessionUrl(sessionCtrl.getActiveSessionId());
+		const currentSessionId = sessionCtrl.getActiveSessionId();
+		if (currentSessionId !== lastBranchLauncherSessionId) {
+			branchLauncher?.close?.();
+			lastBranchLauncherSessionId = currentSessionId;
+		}
+		syncSessionUrl(currentSessionId);
 		syncPromptHistoryState();
 		updateFooter();
 		updateControls();
@@ -930,6 +1027,8 @@ menuCtrl = createMenu({
 		input.focus();
 	},
 	onExecuteCommand: async (value) => {
+		const launcherCommand = handleLauncherSlashCommand(value);
+		if (launcherCommand.matched) return;
 		await sessionCtrl.sendPrompt(value);
 	},
 	onRunAgent: () => {
@@ -937,6 +1036,12 @@ menuCtrl = createMenu({
 	},
 	onRunReview: () => {
 		if (reviewLauncher) reviewLauncher.show();
+	},
+	onRunTree: () => {
+		openTreeLauncher();
+	},
+	onRunFork: () => {
+		openForkLauncher();
 	},
 });
 
@@ -950,6 +1055,52 @@ agentLauncher = createAgentLauncher({
 reviewLauncher = createReviewLauncher({
 	menuOverlay, menuPanel,
 	onSubmit: (cmd) => void sessionCtrl.sendPrompt(cmd),
+});
+branchLauncher = createSessionBranchLauncher({
+	menuOverlay,
+	menuPanel,
+	api,
+	getActiveSessionId: () => sessionCtrl.getActiveSessionId(),
+	onNotice: (message, level = "info") => sessionCtrl.appendNotice(message, level),
+	onNavigate: async ({ targetId, summarize, customInstructions, replaceInstructions, label }) => {
+		const result = await sessionCtrl.navigateTree({ targetId, summarize, customInstructions, replaceInstructions, label });
+		if (!result || result.cancelled) return false;
+		clearAttachments();
+		const currentSessionId = sessionCtrl.getActiveSessionId?.();
+		if (typeof result.editorText === "string") {
+			if (currentSessionId) sessionDrafts.set(currentSessionId, result.editorText);
+			resetPromptHistoryNavigation();
+			setComposerText(result.editorText);
+		} else {
+			if (currentSessionId) sessionDrafts.delete(currentSessionId);
+			resetPromptHistoryNavigation();
+			setComposerText("");
+		}
+		return true;
+	},
+	onFork: async ({ entryId }) => {
+		const previousSessionId = sessionCtrl.getActiveSessionId?.();
+		const result = await sessionCtrl.forkSession(entryId);
+		if (!result || result.cancelled || !result.sessionId) return false;
+		clearAttachments();
+		if (typeof result.selectedText === "string" && result.selectedText.trim()) {
+			sessionDrafts.set(result.sessionId, result.selectedText);
+		} else {
+			sessionDrafts.delete(result.sessionId);
+		}
+		try {
+			sessionCtrl.openSessionId(result.sessionId);
+			await sessionCtrl.refreshState({ silent: true, syncMessages: false });
+			return true;
+		} catch (error) {
+			if (previousSessionId) {
+				sessionCtrl.openSessionId(previousSessionId);
+				await sessionCtrl.refreshState({ silent: true, syncMessages: false }).catch(() => {});
+			}
+			sessionCtrl.appendNotice(`Fork was created, but opening it failed. You were returned to the previous session. You can reopen ${result.sessionId} from the sidebar.`, "warning");
+			throw error;
+		}
+	},
 });
 
 pushCtrl = installPushNotifications({

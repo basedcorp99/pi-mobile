@@ -737,6 +737,99 @@ export function createSessionController({
 		}
 	}
 
+	async function navigateTree(options = {}) {
+		const sessionId = activeSessionId;
+		if (!sessionId || actionBusy) return null;
+		if (activeState?.isStreaming) throw new Error("Wait for the current response to finish before using /tree.");
+		actionBusy = "tree";
+		onStateChange();
+		const payload = {
+			clientId,
+			targetId: options.targetId,
+			...(options.summarize ? { summarize: true } : {}),
+			...(typeof options.customInstructions === "string" && options.customInstructions.trim()
+				? { customInstructions: options.customInstructions.trim() }
+				: {}),
+			...(options.replaceInstructions ? { replaceInstructions: true } : {}),
+			...(typeof options.label === "string" && options.label.trim() ? { label: options.label.trim() } : {}),
+		};
+		try {
+			const result = await api.postJson(`/api/sessions/${encodeURIComponent(sessionId)}/tree`, payload);
+			if (activeSessionId === sessionId && !result?.cancelled) await refreshState({ silent: true, syncMessages: true });
+			return result;
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			if (msg.includes("Not controller") || msg.includes("not_controller")) {
+				try {
+					await api.postJson(`/api/sessions/${encodeURIComponent(sessionId)}/takeover`, { clientId });
+					if (activeSessionId === sessionId) {
+						controllerClientId = clientId;
+						role = "controller";
+					}
+					const result = await api.postJson(`/api/sessions/${encodeURIComponent(sessionId)}/tree`, payload);
+					if (activeSessionId === sessionId && !result?.cancelled) await refreshState({ silent: true, syncMessages: true });
+					return result;
+				} catch (retryError) {
+					if (isSessionGoneError(retryError)) {
+						if (activeSessionId === sessionId) handleSessionLost();
+						return null;
+					}
+					throw retryError;
+				}
+			}
+			if (isSessionGoneError(error)) {
+				if (activeSessionId === sessionId) handleSessionLost();
+				return null;
+			}
+			throw error;
+		} finally {
+			if (actionBusy === "tree") actionBusy = null;
+			onStateChange();
+		}
+	}
+
+	async function forkSession(entryId) {
+		const sessionId = activeSessionId;
+		if (!sessionId || actionBusy) return null;
+		if (activeState?.isStreaming) throw new Error("Wait for the current response to finish before using /fork.");
+		actionBusy = "fork";
+		onStateChange();
+		const payload = { clientId, entryId };
+		try {
+			const result = await api.postJson(`/api/sessions/${encodeURIComponent(sessionId)}/fork`, payload);
+			if (typeof onSidebarRefresh === "function") onSidebarRefresh();
+			return result;
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			if (msg.includes("Not controller") || msg.includes("not_controller")) {
+				try {
+					await api.postJson(`/api/sessions/${encodeURIComponent(sessionId)}/takeover`, { clientId });
+					if (activeSessionId === sessionId) {
+						controllerClientId = clientId;
+						role = "controller";
+					}
+					const result = await api.postJson(`/api/sessions/${encodeURIComponent(sessionId)}/fork`, payload);
+					if (typeof onSidebarRefresh === "function") onSidebarRefresh();
+					return result;
+				} catch (retryError) {
+					if (isSessionGoneError(retryError)) {
+						if (activeSessionId === sessionId) handleSessionLost();
+						return null;
+					}
+					throw retryError;
+				}
+			}
+			if (isSessionGoneError(error)) {
+				if (activeSessionId === sessionId) handleSessionLost();
+				return null;
+			}
+			throw error;
+		} finally {
+			if (actionBusy === "fork") actionBusy = null;
+			onStateChange();
+		}
+	}
+
 	async function abortRun() {
 		if (!activeSessionId) return;
 		if (actionBusy === "bash") {
@@ -884,6 +977,8 @@ export function createSessionController({
 		setSessionName,
 		abortRun,
 		compact,
+		navigateTree,
+		forkSession,
 		runBash,
 		takeOver,
 		release,

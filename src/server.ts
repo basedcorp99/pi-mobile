@@ -18,9 +18,11 @@ import type {
 	ApiAddRepoRequest,
 	ApiCreateSessionRequest,
 	ApiErrorResponse,
+	ApiForkSessionRequest,
 	ApiListModelsResponse,
 	ApiListReposResponse,
 	ApiListSessionsResponse,
+	ApiNavigateTreeRequest,
 	ApiOkResponse,
 	ApiReleaseRequest,
 	ApiSessionState,
@@ -355,6 +357,18 @@ function splitSearchTokens(input: string): string[] {
 	return input.toLowerCase().split(/[\s/_-]+/).map((token) => token.trim()).filter(Boolean);
 }
 
+function pathHasHiddenSegment(path: string): boolean {
+	return path
+		.split("/")
+		.map((part) => part.trim())
+		.filter(Boolean)
+		.some((part) => part !== "." && part !== ".." && part !== "~" && part.startsWith(".") && part.length > 1);
+}
+
+function queryAllowsHiddenSearch(query: string): boolean {
+	return query.includes(".");
+}
+
 function compactSearchText(input: string): string {
 	return input.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
@@ -516,7 +530,9 @@ function queryFzfDirs(query: string, dirs: string[]): Promise<string[]> {
 }
 
 function rankDirectoryMatches(query: string, dirs: string[]): string[] {
+	const allowHidden = queryAllowsHiddenSearch(query);
 	return uniqueDirs(dirs)
+		.filter((path) => allowHidden || !pathHasHiddenSegment(path))
 		.map((path) => ({ path, score: scoreDirectoryMatch(path, query) }))
 		.filter((entry) => entry.score > 0)
 		.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
@@ -527,6 +543,7 @@ function rankDirectoryMatches(query: string, dirs: string[]): string[] {
 async function fuzzyFindDirs(query: string): Promise<string[]> {
 	const trimmed = query.trim();
 	if (!trimmed) return [];
+	const allowHidden = queryAllowsHiddenSearch(trimmed);
 
 	const dirs = await getDirectoryIndex();
 	const rankedFallback = rankDirectoryMatches(trimmed, dirs);
@@ -538,6 +555,7 @@ async function fuzzyFindDirs(query: string): Promise<string[]> {
 	const zoxideSet = new Set(zoxideResults);
 	const fzfSet = new Set(fzfResults);
 	return uniqueDirs([...zoxideResults, ...fzfResults, ...rankedFallback])
+		.filter((path) => allowHidden || !pathHasHiddenSegment(path))
 		.map((path) => ({
 			path,
 			score: scoreDirectoryMatch(path, trimmed) + (zoxideSet.has(path) ? 600 : 0) + (fzfSet.has(path) ? 250 : 0),
@@ -976,6 +994,14 @@ Bun.serve({
 			}
 		}
 
+		if (req.method === "GET" && action === "tree") {
+			try {
+				return json(runtime.getSessionTree(sessionId), 200);
+			} catch {
+				return errorResponse("Session not running", 404);
+			}
+		}
+
 		if (req.method === "GET" && action === "events") {
 			const clientId = url.searchParams.get("clientId")?.trim() || randomUUID();
 			const includeFullHistory = url.searchParams.get("fullHistory") === "1" || url.searchParams.get("full") === "1";
@@ -1027,6 +1053,48 @@ Bun.serve({
 			);
 
 			return stream.response;
+		}
+
+		if (req.method === "POST" && action === "tree") {
+			const raw = (await requireJsonBody(req)) as Record<string, unknown>;
+			if (!raw || typeof raw !== "object") {
+				return errorResponse("Invalid tree navigation payload", 400);
+			}
+			const request: ApiNavigateTreeRequest = {
+				clientId: typeof raw.clientId === "string" ? raw.clientId : "",
+				targetId: typeof raw.targetId === "string" ? raw.targetId : "",
+				...(raw.summarize === true ? { summarize: true } : {}),
+				...(typeof raw.customInstructions === "string" ? { customInstructions: raw.customInstructions } : {}),
+				...(raw.replaceInstructions === true ? { replaceInstructions: true } : {}),
+				...(typeof raw.label === "string" ? { label: raw.label } : {}),
+			};
+			try {
+				return json(await runtime.navigateTree(sessionId, request), 200);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				if (message === "session_not_running") return errorResponse("Session not running", 404);
+				if (message === "not_controller") return errorResponse("Not controller", 403);
+				return errorResponse(message, 400);
+			}
+		}
+
+		if (req.method === "POST" && action === "fork") {
+			const raw = (await requireJsonBody(req)) as Record<string, unknown>;
+			if (!raw || typeof raw !== "object") {
+				return errorResponse("Invalid fork payload", 400);
+			}
+			const request: ApiForkSessionRequest = {
+				clientId: typeof raw.clientId === "string" ? raw.clientId : "",
+				entryId: typeof raw.entryId === "string" ? raw.entryId : "",
+			};
+			try {
+				return json(await runtime.forkSession(sessionId, request), 200);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				if (message === "session_not_running") return errorResponse("Session not running", 404);
+				if (message === "not_controller") return errorResponse("Not controller", 403);
+				return errorResponse(message, 400);
+			}
 		}
 
 		if (req.method === "POST" && action === "command") {

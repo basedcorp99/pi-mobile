@@ -110,6 +110,54 @@ export interface ApiSessionState {
 	commands: ApiSessionCommand[];
 }
 
+export interface ApiSessionTreeEntry {
+	id: string;
+	parentId: string | null;
+	timestamp: string;
+	depth: number;
+	type: string;
+	role?: string;
+	title: string;
+	preview: string;
+	label?: string;
+	labelTimestamp?: string;
+	isUserMessage: boolean;
+	canFork: boolean;
+	isActiveLeaf: boolean;
+	isActivePath: boolean;
+}
+
+export interface ApiSessionTreeResponse {
+	leafId: string | null;
+	entries: ApiSessionTreeEntry[];
+}
+
+export interface ApiNavigateTreeRequest {
+	clientId: string;
+	targetId: string;
+	summarize?: boolean;
+	customInstructions?: string;
+	replaceInstructions?: boolean;
+	label?: string;
+}
+
+export interface ApiNavigateTreeResponse {
+	cancelled: boolean;
+	aborted?: boolean;
+	editorText?: string;
+}
+
+export interface ApiForkSessionRequest {
+	clientId: string;
+	entryId: string;
+}
+
+export interface ApiForkSessionResponse {
+	cancelled: boolean;
+	sessionId?: string;
+	selectedText?: string;
+}
+
 export interface ApiAskQuestion {
 	id: string;
 	question: string;

@@ -28,12 +28,19 @@ function fuzzyMatch(query, hay) {
 	return tokens.every((t) => h.includes(t) || fuzzyCharsMatch(t, h));
 }
 
-export function getCommandMenuEntries(commands) {
+export function getCommandMenuEntries(commands, options = {}) {
 	const review = Array.isArray(commands)
 		? commands.find((cmd) => cmd && typeof cmd === "object" && String(cmd.name || "").toLowerCase() === "review") || null
 		: null;
+	const messages = Array.isArray(options?.messages) ? options.messages : [];
+	const hasSession = Boolean(options?.hasSession);
+	const isStreaming = Boolean(options?.isStreaming);
+	const hasAnyMessages = messages.length > 0;
+	const hasUserMessages = messages.some((message) => message && typeof message === "object" && message.role === "user");
 	return [
-		{ key: "agents", title: "agents", description: "Open the agent launcher", kind: "agents" },
+		{ key: "agents", title: "agents", description: "Open the agent launcher", kind: "agents", disabled: !hasSession },
+		{ key: "tree", title: "tree", description: "Browse checkpoints and jump backward or forward between branches", kind: "tree", disabled: !hasSession || !hasAnyMessages || isStreaming },
+		{ key: "fork", title: "fork", description: "Create a new session right before an earlier user message", kind: "fork", disabled: !hasSession || !hasUserMessages || isStreaming },
 		{
 			key: "review",
 			title: "review",
@@ -53,6 +60,12 @@ export async function handleCommandMenuAction({ entry, state, onExecuteCommand, 
 	}
 	if (entry.kind === "review") {
 		return { ok: true, action: "review" };
+	}
+	if (entry.kind === "tree") {
+		return { ok: true, action: "tree" };
+	}
+	if (entry.kind === "fork") {
+		return { ok: true, action: "fork" };
 	}
 
 	const cmd = entry.command;
@@ -107,6 +120,8 @@ export function createMenu({
 	onExecuteCommand,
 	onRunAgent,
 	onRunReview,
+	onRunTree,
+	onRunFork,
 }) {
 	let open = false;
 	let cachedModels = null;
@@ -371,7 +386,11 @@ export function createMenu({
 				list.innerHTML = "";
 				const activeState = getActiveState();
 				const commands = Array.isArray(activeState?.commands) ? activeState.commands : [];
-				const entries = getCommandMenuEntries(commands);
+				const entries = getCommandMenuEntries(commands, {
+					hasSession: Boolean(activeState?.sessionId),
+					isStreaming: Boolean(activeState?.isStreaming),
+					messages: activeState?.messages,
+				});
 				for (const entry of entries) {
 					const item = document.createElement("div");
 					item.className = `menu-item${entry.disabled ? " disabled" : ""}`;
@@ -402,6 +421,14 @@ export function createMenu({
 							}
 							if (result.action === "review") {
 								setTimeout(() => { if (typeof onRunReview === "function") onRunReview(); }, 0);
+								return;
+							}
+							if (result.action === "tree") {
+								setTimeout(() => { if (typeof onRunTree === "function") onRunTree(); }, 0);
+								return;
+							}
+							if (result.action === "fork") {
+								setTimeout(() => { if (typeof onRunFork === "function") onRunFork(); }, 0);
 								return;
 							}
 						}

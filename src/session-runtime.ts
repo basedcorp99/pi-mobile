@@ -30,10 +30,16 @@ import type {
 	ApiAskQuestion,
 	ApiCommandRequest,
 	ApiCreateSessionRequest,
+	ApiForkSessionRequest,
+	ApiForkSessionResponse,
 	ApiModelInfo,
+	ApiNavigateTreeRequest,
+	ApiNavigateTreeResponse,
 	ApiSessionCommand,
 	ApiSessionState,
 	ApiSessionSummary,
+	ApiSessionTreeEntry,
+	ApiSessionTreeResponse,
 	ClientRole,
 	ApiSessionPatch,
 	SseEvent,
@@ -337,6 +343,208 @@ function extractTextContent(content: unknown): string {
 		.join("");
 }
 
+function compactPreview(text: string, max = 140): string {
+	const normalized = String(text || "").replace(/\s+/g, " ").trim();
+	if (!normalized) return "";
+	return normalized.length > max ? `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}…` : normalized;
+}
+
+function describeSessionTreeEntry(entry: any): Pick<ApiSessionTreeEntry, "type" | "role" | "title" | "preview" | "isUserMessage" | "canFork"> {
+	if (!entry || typeof entry !== "object") {
+		return { type: "unknown", title: "Entry", preview: "", isUserMessage: false, canFork: false };
+	}
+
+	if (entry.type === "message") {
+		const role = typeof entry.message?.role === "string" ? entry.message.role : undefined;
+		if (role === "user") {
+			return {
+				type: "message",
+				role,
+				title: "User",
+				preview: compactPreview(extractTextContent(entry.message?.content) || "(empty user message)"),
+				isUserMessage: true,
+				canFork: true,
+			};
+		}
+		if (role === "assistant") {
+			const preview = compactPreview(extractTextContent(entry.message?.content));
+			return {
+				type: "message",
+				role,
+				title: "Assistant",
+				preview: preview || "Assistant response",
+				isUserMessage: false,
+				canFork: false,
+			};
+		}
+		if (role === "toolResult") {
+			const toolName = typeof entry.message?.toolName === "string" ? entry.message.toolName : "tool";
+			const preview = compactPreview(extractTextContent(entry.message?.content));
+			return {
+				type: "message",
+				role,
+				title: `Tool: ${toolName}`,
+				preview: preview || "Tool result",
+				isUserMessage: false,
+				canFork: false,
+			};
+		}
+		if (role === "bashExecution") {
+			const command = typeof entry.message?.command === "string" ? entry.message.command : "bash command";
+			return {
+				type: "message",
+				role,
+				title: "Bash",
+				preview: compactPreview(command) || "Bash command",
+				isUserMessage: false,
+				canFork: false,
+			};
+		}
+		if (role === "custom") {
+			const customType = typeof entry.message?.customType === "string" ? entry.message.customType : "custom";
+			const preview = compactPreview(extractTextContent(entry.message?.content) || String(entry.message?.content || ""));
+			return {
+				type: "message",
+				role,
+				title: `Custom: ${customType}`,
+				preview: preview || "Custom message",
+				isUserMessage: false,
+				canFork: false,
+			};
+		}
+		return {
+			type: "message",
+			role,
+			title: role ? role[0]!.toUpperCase() + role.slice(1) : "Message",
+			preview: compactPreview(extractTextContent(entry.message?.content) || "Message"),
+			isUserMessage: false,
+			canFork: false,
+		};
+	}
+
+	if (entry.type === "branch_summary") {
+		return {
+			type: entry.type,
+			role: "branchSummary",
+			title: "Branch summary",
+			preview: compactPreview(typeof entry.summary === "string" ? entry.summary : "") || "Branch summary",
+			isUserMessage: false,
+			canFork: false,
+		};
+	}
+
+	if (entry.type === "compaction") {
+		return {
+			type: entry.type,
+			role: "compactionSummary",
+			title: "Compaction",
+			preview: compactPreview(typeof entry.summary === "string" ? entry.summary : "") || "Compaction summary",
+			isUserMessage: false,
+			canFork: false,
+		};
+	}
+
+	if (entry.type === "model_change") {
+		return {
+			type: entry.type,
+			title: "Model change",
+			preview: compactPreview(`${entry.provider || "provider"}/${entry.modelId || "model"}`),
+			isUserMessage: false,
+			canFork: false,
+		};
+	}
+
+	if (entry.type === "thinking_level_change") {
+		return {
+			type: entry.type,
+			title: "Thinking",
+			preview: compactPreview(String(entry.thinkingLevel || "")) || "Thinking level change",
+			isUserMessage: false,
+			canFork: false,
+		};
+	}
+
+	if (entry.type === "custom") {
+		return {
+			type: entry.type,
+			title: `Custom: ${entry.customType || "entry"}`,
+			preview: compactPreview(typeof entry.data === "string" ? entry.data : JSON.stringify(entry.data ?? {})) || "Custom entry",
+			isUserMessage: false,
+			canFork: false,
+		};
+	}
+
+	if (entry.type === "custom_message") {
+		return {
+			type: entry.type,
+			role: "custom",
+			title: `Custom: ${entry.customType || "message"}`,
+			preview: compactPreview(extractTextContent(entry.content) || String(entry.content || "")) || "Custom message",
+			isUserMessage: false,
+			canFork: false,
+		};
+	}
+
+	if (entry.type === "label") {
+		return {
+			type: entry.type,
+			title: "Label",
+			preview: compactPreview(typeof entry.label === "string" ? entry.label : "(cleared label)"),
+			isUserMessage: false,
+			canFork: false,
+		};
+	}
+
+	if (entry.type === "session_info") {
+		return {
+			type: entry.type,
+			title: "Session info",
+			preview: compactPreview(typeof entry.name === "string" ? entry.name : "Session metadata") || "Session metadata",
+			isUserMessage: false,
+			canFork: false,
+		};
+	}
+
+	return {
+		type: typeof entry.type === "string" ? entry.type : "entry",
+		title: "Entry",
+		preview: "",
+		isUserMessage: false,
+		canFork: false,
+	};
+}
+
+function flattenSessionTree(
+	nodes: Array<any>,
+	depth: number,
+	leafId: string | null,
+	activePathIds: Set<string>,
+	out: ApiSessionTreeEntry[],
+): void {
+	for (const node of nodes || []) {
+		const entry = node?.entry;
+		if (!entry || typeof entry !== "object") continue;
+		const described = describeSessionTreeEntry(entry);
+		out.push({
+			id: String(entry.id || ""),
+			parentId: entry.parentId ?? null,
+			timestamp: typeof entry.timestamp === "string" ? entry.timestamp : new Date().toISOString(),
+			depth,
+			type: described.type,
+			role: described.role,
+			title: described.title,
+			preview: described.preview,
+			label: typeof node?.label === "string" ? node.label : undefined,
+			labelTimestamp: typeof node?.labelTimestamp === "string" ? node.labelTimestamp : undefined,
+			isUserMessage: described.isUserMessage,
+			canFork: described.canFork,
+			isActiveLeaf: leafId === entry.id,
+			isActivePath: activePathIds.has(entry.id),
+		});
+		flattenSessionTree(Array.isArray(node?.children) ? node.children : [], depth + 1, leafId, activePathIds, out);
+	}
+}
+
 function computeFirstMessage(messages: AgentSession["messages"]): string {
 	for (const message of messages) {
 		if (!message || typeof message !== "object") continue;
@@ -393,9 +601,9 @@ function safeStatsSnapshot(session: AgentSession): ApiSessionState["stats"] {
 	}
 }
 
-// Only include built-in commands that actually work in pi-mobile (SDK/headless mode).
-// Commands like /login, /model, /tree, /fork etc. are TUI-only (handled by interactive-mode)
-// and would fall through to the LLM if sent as prompts.
+// Only include built-in commands that actually work as plain slash commands in pi-mobile.
+// Commands with dedicated mobile UI (for example tree/fork launchers) are surfaced elsewhere
+// instead of being sent through the prompt pipeline.
 const BUILTIN_COMMANDS: ApiSessionCommand[] = [
 	{ name: "compact", description: "Compact conversation history", source: "extension" },
 ];
@@ -496,6 +704,24 @@ function buildMessagesFromSessionBranch(session: AgentSession): AgentMessage[] {
 					details: entry.details,
 					timestamp: toMessageTimestamp(entry.timestamp),
 				});
+				break;
+			}
+			case "branch_summary": {
+				messages.push({
+					role: "branchSummary",
+					summary: entry.summary,
+					fromId: entry.fromId,
+					timestamp: toMessageTimestamp(entry.timestamp),
+				} as AgentMessage);
+				break;
+			}
+			case "compaction": {
+				messages.push({
+					role: "compactionSummary",
+					summary: entry.summary,
+					tokensBefore: entry.tokensBefore,
+					timestamp: toMessageTimestamp(entry.timestamp),
+				} as AgentMessage);
 				break;
 			}
 			default:
@@ -1044,6 +1270,107 @@ export class PiWebRuntime {
 		return buildState(runtime.session, runtime.cwd, includeFullHistory, runtime.startAgent);
 	}
 
+	getSessionTree(sessionId: string): ApiSessionTreeResponse {
+		const runtime = this.runningById.get(sessionId);
+		if (!runtime) {
+			throw new Error("session_not_running");
+		}
+
+		const leafId = runtime.session.sessionManager.getLeafId();
+		const activePathIds = new Set<string>();
+		for (const entry of runtime.session.sessionManager.getBranch()) {
+			if (entry?.id) activePathIds.add(entry.id);
+		}
+
+		const entries: ApiSessionTreeEntry[] = [];
+		flattenSessionTree(runtime.session.sessionManager.getTree() as Array<any>, 0, leafId, activePathIds, entries);
+		return { leafId, entries };
+	}
+
+	async navigateTree(sessionId: string, request: ApiNavigateTreeRequest): Promise<ApiNavigateTreeResponse> {
+		const runtime = this.runningById.get(sessionId);
+		if (!runtime) throw new Error("session_not_running");
+		const clientId = typeof request.clientId === "string" ? request.clientId.trim() : "";
+		if (!clientId) throw new Error("missing_client_id");
+		this.assertController(runtime, clientId);
+		if (runtime.session.isStreaming) throw new Error("cannot_tree_while_streaming");
+
+		const targetId = typeof request.targetId === "string" ? request.targetId.trim() : "";
+		if (!targetId) throw new Error("missing_target_id");
+
+		const result = await runtime.session.navigateTree(targetId, {
+			summarize: Boolean(request.summarize),
+			customInstructions:
+				typeof request.customInstructions === "string" && request.customInstructions.trim().length > 0
+					? request.customInstructions.trim()
+					: undefined,
+			replaceInstructions: Boolean(request.replaceInstructions),
+			label: typeof request.label === "string" && request.label.trim().length > 0 ? request.label.trim() : undefined,
+		});
+		runtime.modifiedAtMs = Date.now();
+		return {
+			cancelled: Boolean(result.cancelled),
+			aborted: Boolean(result.aborted),
+			editorText: typeof result.editorText === "string" ? result.editorText : undefined,
+		};
+	}
+
+	async forkSession(sessionId: string, request: ApiForkSessionRequest): Promise<ApiForkSessionResponse> {
+		const runtime = this.runningById.get(sessionId);
+		if (!runtime) throw new Error("session_not_running");
+		const clientId = typeof request.clientId === "string" ? request.clientId.trim() : "";
+		if (!clientId) throw new Error("missing_client_id");
+		this.assertController(runtime, clientId);
+		if (runtime.session.isStreaming) throw new Error("cannot_fork_while_streaming");
+
+		const entryId = typeof request.entryId === "string" ? request.entryId.trim() : "";
+		if (!entryId) throw new Error("missing_entry_id");
+
+		const runner = runtime.session.extensionRunner;
+		if (runner?.hasHandlers("session_before_fork")) {
+			const before = await runner.emit({ type: "session_before_fork", entryId });
+			if (before?.cancel) return { cancelled: true };
+		}
+
+		const selectedEntry = runtime.session.sessionManager.getEntry(entryId) as any;
+		if (!selectedEntry || selectedEntry.type !== "message" || selectedEntry.message?.role !== "user") {
+			throw new Error("invalid_fork_entry");
+		}
+
+		if (!runtime.session.sessionManager.isPersisted()) {
+			throw new Error("fork_requires_persisted_session");
+		}
+
+		const currentSessionFile = runtime.session.sessionFile;
+		if (!currentSessionFile) {
+			throw new Error("missing_session_file");
+		}
+
+		const sessionDir = runtime.session.sessionManager.getSessionDir();
+		const selectedText = extractTextContent(selectedEntry.message?.content);
+		let forkedSessionPath: string | undefined;
+
+		if (!selectedEntry.parentId) {
+			const sessionManager = SessionManager.create(runtime.cwd, sessionDir);
+			sessionManager.newSession({ parentSession: currentSessionFile });
+			forkedSessionPath = sessionManager.getSessionFile();
+		} else {
+			const sourceManager = SessionManager.open(currentSessionFile, sessionDir);
+			forkedSessionPath = sourceManager.createBranchedSession(selectedEntry.parentId);
+		}
+
+		if (!forkedSessionPath) {
+			throw new Error("failed_to_create_forked_session");
+		}
+
+		const started = await this.startSession({ clientId, resumeSessionPath: forkedSessionPath });
+		return {
+			cancelled: false,
+			sessionId: started.sessionId,
+			selectedText: selectedText || undefined,
+		};
+	}
+
 	getSessionRole(sessionId: string, clientId: string): { role: ClientRole; controllerClientId: string | null } {
 		const runtime = this.runningById.get(sessionId);
 		if (!runtime) {
@@ -1218,9 +1545,13 @@ export class PiWebRuntime {
 			if (cmdMatch && TUI_ONLY_COMMANDS.has(cmdMatch[1].toLowerCase())) {
 				// Check if it's actually a registered extension command (takes priority)
 				const runner = (runtime.session as any)._extensionRunner;
-				const isExtCmd = runner && typeof runner.getCommand === "function" && runner.getCommand(cmdMatch[1].toLowerCase());
+				const commandName = cmdMatch[1].toLowerCase();
+				const isExtCmd = runner && typeof runner.getCommand === "function" && runner.getCommand(commandName);
 				if (!isExtCmd) {
-					this.broadcast(sessionId, { type: "ui_notify", message: `/${cmdMatch[1]} is not available in pi-mobile. Use the UI controls instead.`, level: "warning" });
+					const message = commandName === "tree" || commandName === "fork"
+						? `/${commandName} is available in pi-mobile via the Commands menu.`
+						: `/${cmdMatch[1]} is not available in pi-mobile. Use the UI controls instead.`;
+					this.broadcast(sessionId, { type: "ui_notify", message, level: "warning" });
 					return;
 				}
 			}

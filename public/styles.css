@@ -615,6 +615,92 @@
       color: var(--accent-strong);
       padding-inline: 16px;
     }
+    .branch-launcher-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-height: 42vh;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .branch-launcher-item {
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: 1px solid transparent;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 12px 14px;
+    }
+    .branch-launcher-item .primary,
+    .branch-launcher-item .secondary {
+      white-space: normal;
+      word-break: break-word;
+    }
+    .branch-launcher-item .primary {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+    .branch-launcher-item .secondary {
+      color: var(--text-secondary);
+      line-height: 1.45;
+    }
+    .branch-launcher-meta-line {
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.35;
+      white-space: normal;
+      word-break: break-word;
+    }
+    .branch-launcher-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .branch-launcher-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 3px 9px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .02em;
+      color: var(--text-muted);
+      background: var(--surface-light);
+    }
+    .branch-launcher-badge.branch {
+      color: var(--accent-strong);
+      border-color: rgba(52, 211, 153, 0.18);
+      background: rgba(52, 211, 153, 0.08);
+    }
+    .branch-launcher-badge.current {
+      color: #c4b5fd;
+      border-color: rgba(196, 181, 253, 0.22);
+      background: rgba(196, 181, 253, 0.09);
+    }
+    .branch-launcher-badge.active {
+      color: #93c5fd;
+      border-color: rgba(147, 197, 253, 0.22);
+      background: rgba(147, 197, 253, 0.08);
+    }
+    .branch-launcher-badge.tip {
+      color: #fca5a5;
+      border-color: rgba(252, 165, 165, 0.22);
+      background: rgba(252, 165, 165, 0.08);
+    }
+    .branch-launcher-badge.label {
+      color: #fbbf24;
+      border-color: rgba(251, 191, 36, 0.2);
+      background: rgba(251, 191, 36, 0.08);
+    }
+    .branch-launcher-badge.user {
+      color: var(--text-secondary);
+    }
 
     /* ── Layout ────────────────────────────────────────────── */
     .layout { display: flex; flex: 1; overflow: hidden; position: relative; overscroll-behavior: none; }
@@ -1739,15 +1825,38 @@
     #footer-left-2 {
       flex: 1;
       min-width: 0;
+      display: flex;
+      align-items: center;
+      overflow: hidden;
+    }
+    #footer-cwd,
+    #footer-metrics {
+      min-width: 0;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+    #footer-cwd {
+      flex: 1 1 auto;
+    }
+    #footer-metrics {
+      flex: 0 1 auto;
+      max-width: 100%;
+    }
+    #footer-cwd:empty,
+    #footer-metrics:empty {
+      display: none;
+    }
+    #footer-cwd:not(:empty) + #footer-metrics:not(:empty)::before {
+      content: " • ";
     }
     #footer-right-2 {
       float: none;
       flex-shrink: 0;
       margin-left: 10px;
       white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .footer-line {
       color: var(--text-secondary);
@@ -1771,8 +1880,8 @@
     }
 
     @media (hover: none) and (pointer: coarse) and (max-width: 740px) {
-      /* Bottom sheet menus on phone (not model/thinking which are centered modals) */
-      .menu-overlay:not([data-kind="model"]):not([data-kind="thinking"]) .menu-panel {
+      /* Bottom sheet menus on phone (not centered modal dialogs) */
+      .menu-overlay:not([data-kind="model"]):not([data-kind="thinking"]):not([data-kind="branch-launcher"]) .menu-panel {
         position: fixed !important;
         left: 0 !important;
         right: 0 !important;
@@ -1792,7 +1901,7 @@
         from { transform: translateY(100%); }
         to { transform: translateY(0); }
       }
-      .menu-overlay:not([data-kind="model"]):not([data-kind="thinking"]) .menu-panel::before {
+      .menu-overlay:not([data-kind="model"]):not([data-kind="thinking"]):not([data-kind="branch-launcher"]) .menu-panel::before {
         content: "";
         display: block;
         width: 36px;
@@ -1801,18 +1910,19 @@
         background: var(--border-strong);
         margin: 8px auto 4px;
       }
-      /* Model and Thinking dialogs: centered modal (not bottom sheet) so keyboard doesn't hide the list */
+      /* Centered modal dialogs (not bottom sheets) so keyboard doesn't hide the list */
       .menu-overlay[data-kind="model"] .menu-panel,
-      .menu-overlay[data-kind="thinking"] .menu-panel {
+      .menu-overlay[data-kind="thinking"] .menu-panel,
+      .menu-overlay[data-kind="branch-launcher"] .menu-panel {
         position: fixed !important;
         left: 50% !important;
         top: 10% !important;
         bottom: auto !important;
         transform: translateX(-50%) !important;
-        width: min(480px, 92vw) !important;
-        max-width: min(480px, 92vw) !important;
+        width: min(680px, 96vw) !important;
+        max-width: min(680px, 96vw) !important;
         min-width: 0 !important;
-        max-height: min(70vh, 520px) !important;
+        max-height: min(82vh, 760px) !important;
         border-radius: var(--radius-lg);
         box-shadow: 0 16px 40px rgba(0,0,0,.45);
       }
@@ -1853,7 +1963,23 @@
 
       /* Footer: stack on narrow screens */
       #footer-line-2 { display: flex; flex-direction: column; gap: 1px; }
-      #footer-line-2 span { display: block; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      #footer-line-2 > span { display: block; width: 100%; }
+      #footer-left-2 {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1px;
+      }
+      #footer-cwd,
+      #footer-metrics,
+      #footer-right-2 {
+        display: block;
+        width: 100%;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      #footer-cwd:not(:empty) + #footer-metrics:not(:empty)::before { content: none; }
       #footer-line-2 .footer-right { float: none; text-align: left; margin-left: 0; }
       .sidebar {
         position: absolute;
@@ -1876,7 +2002,7 @@
         flex-direction: row;
         align-items: center;
       }
-      #footer-line-2 span {
+      #footer-line-2 > span {
         display: inline;
         width: auto;
         white-space: nowrap;

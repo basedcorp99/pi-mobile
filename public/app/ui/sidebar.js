@@ -661,11 +661,23 @@ export function createSidebar({
 		let searchSeq = 0;
 		let isSearching = false;
 
+		const pathHasHiddenSegment = (dir) => String(dir || "")
+			.split("/")
+			.map((part) => String(part || "").trim())
+			.filter(Boolean)
+			.some((part) => part !== "." && part !== ".." && part !== "~" && part.startsWith(".") && part.length > 1);
+
+		const filterVisibleDirs = (dirs, query) => {
+			const allowHidden = String(query || "").includes(".");
+			return (Array.isArray(dirs) ? dirs : []).filter((dir) => allowHidden || !pathHasHiddenSegment(dir));
+		};
+
 		const filterDirsLocally = (query, pool) => {
 			const q = String(query || "").trim().toLowerCase();
-			if (!q) return pool.slice();
+			const visiblePool = filterVisibleDirs(pool, q);
+			if (!q) return visiblePool.slice();
 			const tokens = q.split(/[\s/_-]+/).filter(Boolean);
-			return pool
+			return visiblePool
 				.map((dir) => {
 					const lower = String(dir || "").toLowerCase();
 					const base = lower.split("/").pop() || lower;
@@ -687,20 +699,21 @@ export function createSidebar({
 				.map((entry) => entry.dir);
 		};
 
-		const renderFolderList = (dirs, emptyMessage) => {
-			currentResults = Array.isArray(dirs) ? dirs.slice() : [];
+		const renderFolderList = (dirs, emptyMessage, query = pathInput.value.trim()) => {
+			const filteredDirs = filterVisibleDirs(dirs, query);
+			currentResults = filteredDirs.slice();
 			resultsContainer.innerHTML = "";
-			if (dirs.length === 0) {
+			if (filteredDirs.length === 0) {
 				const hint = document.createElement("div");
 				hint.className = "si";
 				const meta = document.createElement("div");
 				meta.className = "si-meta new-session-empty";
-				meta.textContent = emptyMessage || "No matching folders.";
+				meta.textContent = emptyMessage || (String(query || "").includes(".") ? "No matching folders." : "No matching non-hidden folders.");
 				hint.appendChild(meta);
 				resultsContainer.appendChild(hint);
 				return;
 			}
-			for (const cwd of dirs) {
+			for (const cwd of filteredDirs) {
 				const row = document.createElement("div");
 				row.className = "si";
 				const name = document.createElement("div");
@@ -735,9 +748,9 @@ export function createSidebar({
 				const dirs = Array.isArray(data.dirs) ? data.dirs : [];
 				isSearching = false;
 				if (dirs.length > 0) {
-					renderFolderList(dirs);
+					renderFolderList(dirs, undefined, val);
 				} else if (currentResults.length === 0) {
-					renderFolderList([], "No matching folders on this server.");
+					renderFolderList([], "No matching folders on this server.", val);
 				}
 			} catch {
 				isSearching = false;
@@ -753,16 +766,16 @@ export function createSidebar({
 			if (searchTimer) clearTimeout(searchTimer);
 			if (!val) {
 				if (recentDirs.length > 0) {
-					renderFolderList(recentDirs);
+					renderFolderList(recentDirs, undefined, "");
 				} else {
-					renderFolderList([], "Type to search any folder on the server.");
+					renderFolderList([], "Type to search any folder on the server.", "");
 				}
 				return;
 			}
 			// Immediate local filter for snappy feedback
 			const localHits = filterDirsLocally(val, recentDirs);
-			if (localHits.length > 0) renderFolderList(localHits);
-			else renderFolderList([], "Searching…");
+			if (localHits.length > 0) renderFolderList(localHits, undefined, val);
+			else renderFolderList([], "Searching…", val);
 
 			// Fire remote search quickly (150ms debounce)
 			const seq = ++searchSeq;
@@ -790,7 +803,7 @@ export function createSidebar({
 			// Last resort: fire a remote search and use first result
 			try {
 				const data = await api.getJson(`/api/dirs/search?q=${encodeURIComponent(val)}`);
-				const dirs = Array.isArray(data.dirs) ? data.dirs : [];
+				const dirs = filterVisibleDirs(Array.isArray(data.dirs) ? data.dirs : [], val);
 				if (dirs[0]) {
 					void startInDir(dirs[0], launchAgent.value);
 					return;
@@ -805,11 +818,11 @@ export function createSidebar({
 		sessionsList.appendChild(resultsContainer);
 
 		// Show initial state: loading recent dirs, then show them or hint
-		renderFolderList([], "Loading…");
+		renderFolderList([], "Loading…", "");
 		reposPromise.then((repos) => {
 			if (pathInput.value.trim()) return; // user already typing
-			if (repos.length > 0) renderFolderList(repos);
-			else renderFolderList([], "Type to search any folder on the server.");
+			if (repos.length > 0) renderFolderList(repos, undefined, "");
+			else renderFolderList([], "Type to search any folder on the server.", "");
 		});
 		setTimeout(() => pathInput.focus(), 0);
 	}

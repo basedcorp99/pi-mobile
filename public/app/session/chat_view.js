@@ -930,6 +930,12 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 					tools.setText(toolCallId, toolName, contentText || safeStringify(m.content));
 					tools.setResult(toolCallId, toolName, m);
 					tools.setImages(toolCallId, extractImagesFromContent(m.content));
+				} else if (m.role === "branchSummary") {
+					const summary = typeof m.summary === "string" ? m.summary : "";
+					if (summary) appendInlineNotice(`Branch summary: ${summary}`);
+				} else if (m.role === "compactionSummary") {
+					const summary = typeof m.summary === "string" ? m.summary : "";
+					if (summary) appendInlineNotice(`Compaction summary: ${summary}`);
 				} else if (m.customType || m.role === "custom") {
 					if (upsertSubagentCard(m)) continue;
 					if (upsertReviewCard(m)) continue;
