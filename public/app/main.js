@@ -71,6 +71,7 @@ const btnTakeover = document.getElementById("btn-takeover");
 const btnAbort = document.getElementById("btn-abort");
 const btnCompact = document.getElementById("btn-compact");
 const btnRelease = document.getElementById("btn-release");
+const btnLoadMore = document.getElementById("btn-load-more");
 const btnTakeoverTxt = btnTakeover?.querySelector?.(".txt") || null;
 const btnAbortTxt = btnAbort?.querySelector?.(".txt") || null;
 const btnCompactTxt = btnCompact?.querySelector?.(".txt") || null;
@@ -639,7 +640,8 @@ function rememberLastVoiceTranscript(text, job = null) {
 }
 
 function restoreLastVoiceTranscript() {
-	const saved = getLastVoiceTranscript();
+	const sessionId = sessionCtrl?.getActiveSessionId?.() || null;
+	const saved = getLastVoiceTranscript(sessionId);
 	if (!saved?.text) {
 		sessionCtrl?.appendNotice?.("No saved voice transcript yet.", "warning");
 		return false;
@@ -703,7 +705,8 @@ function updateAttachmentControls() {
 		else btnVoice.title = voiceInputMode === VOICE_INPUT_MODE_AUTO_SEND ? "Tap or hold to record and auto-send" : "Tap or hold to record";
 	}
 	if (btnLastVoice) {
-		const saved = getLastVoiceTranscript();
+		const sessionId = sessionCtrl?.getActiveSessionId?.() || null;
+		const saved = getLastVoiceTranscript(sessionId);
 		const when = saved ? formatSavedVoiceTime(saved.updatedAt) : "";
 		btnLastVoice.hidden = !saved;
 		btnLastVoice.disabled = disabled || !saved;
@@ -796,6 +799,11 @@ function updateControls() {
 	if (btnModel) btnModel.disabled = !canChangeSettings;
 	if (btnThinking) btnThinking.disabled = !canChangeSettings;
 	if (btnHistory) btnHistory.disabled = !hasSession || !isController || actionBusy === "release" || actionBusy === "compact" || actionBusy === "bash" || !hasPromptHistory;
+	if (btnLoadMore) {
+		const historyLoaded = sessionCtrl.isHistoryFullyLoaded ? sessionCtrl.isHistoryFullyLoaded() : false;
+		btnLoadMore.style.display = (!hasSession || historyLoaded) ? "none" : "";
+		btnLoadMore.disabled = Boolean(actionBusy);
+	}
 	if (btnTakeoverTxt) btnTakeoverTxt.textContent = actionBusy === "takeover" ? "Taking…" : actionBusy === "reconnect" ? "Reconnecting…" : isController ? "Reconnect" : "Take over";
 	if (kbTakeoverTextNode) kbTakeoverTextNode.textContent = actionBusy === "takeover" ? " Taking…" : actionBusy === "reconnect" ? " Reconnecting…" : isController ? " Reconnect" : " Take over";
 	if (btnAbortTxt) btnAbortTxt.textContent = actionBusy === "abort" ? "Aborting…" : actionBusy === "bash" ? "Stop" : "Abort";
@@ -1397,6 +1405,9 @@ btnRelease.addEventListener("click", () => {
 });
 if (btnAttach) btnAttach.addEventListener("click", () => imageInput?.click());
 if (btnHistory) btnHistory.addEventListener("click", () => openPromptHistoryDialog());
+if (btnLoadMore) btnLoadMore.addEventListener("click", () => {
+	void sessionCtrl.loadFullHistory();
+});
 if (btnLastVoice) btnLastVoice.addEventListener("click", () => { restoreLastVoiceTranscript(); });
 if (btnVoice) {
 	let pressActive = false;

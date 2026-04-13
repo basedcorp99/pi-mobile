@@ -112,17 +112,20 @@ export function setVoiceTranscriptionMode(mode) {
 	safeLocalStorageSet("piWebVoiceTranscriptionMode", mode === "web-speech" ? "web-speech" : "parakeet");
 }
 
-export function getLastVoiceTranscript() {
+export function getLastVoiceTranscript(sessionId = null) {
 	const raw = safeLocalStorageGet("piWebLastVoiceTranscript");
 	if (!raw) return null;
 	try {
 		const parsed = JSON.parse(raw);
 		const text = typeof parsed?.text === "string" ? parsed.text.trim() : "";
 		if (!text) return null;
+		const savedSessionId = typeof parsed?.sessionId === "string" ? parsed.sessionId : "";
+		// If sessionId is provided, only return transcript if it matches
+		if (sessionId && savedSessionId !== sessionId) return null;
 		return {
 			text,
 			updatedAt: typeof parsed?.updatedAt === "number" ? parsed.updatedAt : 0,
-			sessionId: typeof parsed?.sessionId === "string" ? parsed.sessionId : "",
+			sessionId: savedSessionId,
 			mode: parsed?.mode === "auto-send" ? "auto-send" : "compose",
 		};
 	} catch {

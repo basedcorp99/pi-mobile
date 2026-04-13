@@ -44,6 +44,7 @@ export function createSessionController({
 	let connectMessageLimit = 0;
 	let historyHydrationTimer = null;
 	let historyHydrationGeneration = 0;
+	let historyFullyLoaded = false;
 
 	function getInitialMessageLimit() {
 		return INITIAL_SESSION_HISTORY_LIMIT;
@@ -64,6 +65,10 @@ export function createSessionController({
 			clearTimeout(historyHydrationTimer);
 			historyHydrationTimer = null;
 		}
+	}
+
+	function resetHistoryLoadedState() {
+		historyFullyLoaded = false;
 	}
 
 	function closeEvents() {
@@ -143,6 +148,7 @@ export function createSessionController({
 				lastCliCommand = computeCliCommand(activeState) || lastCliCommand;
 				if (state?.isStreaming || pendingPrompt) chatView.syncFromMessages(state?.messages || []);
 				else chatView.replaceFromMessages(state?.messages || []);
+				historyFullyLoaded = true;
 				onStateChange();
 			} catch {
 				// Ignore background hydration failures; the recent tail is already visible.
@@ -233,6 +239,7 @@ export function createSessionController({
 		actionBusy = null;
 		reconnectAttempts = 0;
 		connectGraceUntil = 0;
+		resetHistoryLoadedState();
 		chatView.appendNotice(`Session disconnected${oldId ? " (" + oldId.slice(0, 8) + ")" : ""}. Open the sidebar to resume or start a new session.`, "error");
 		onStateChange();
 		onSidebarRefresh();
@@ -301,6 +308,7 @@ export function createSessionController({
 			pendingPrompt = false;
 			actionBusy = null;
 			connectGraceUntil = 0;
+		resetHistoryLoadedState();
 			controllerClientId = event.controllerClientId || null;
 			role = event.role;
 			lastCliCommand = computeCliCommand(activeState) || lastCliCommand;
@@ -1009,9 +1017,27 @@ export function createSessionController({
 
 	function openSessionId(sessionId) {
 		actionBusy = null;
+		resetHistoryLoadedState();
 		activeSessionId = sessionId;
 		connectEvents(activeSessionId, { messageLimit: getInitialMessageLimit() });
 		onStateChange();
+	}
+
+	async function loadFullHistory() {
+		if (!activeSessionId) return;
+		try {
+			const state = await api.getJson(`/api/sessions/${encodeURIComponent(activeSessionId)}/state?fullHistory=1`);
+			if (activeSessionId) {
+				activeState = state;
+				lastCliCommand = computeCliCommand(activeState) || lastCliCommand;
+				if (state?.isStreaming || pendingPrompt) chatView.syncFromMessages(state?.messages || []);
+				else chatView.replaceFromMessages(state?.messages || []);
+				historyFullyLoaded = true;
+				onStateChange();
+			}
+		} catch {
+			// Ignore failures
+		}
 	}
 
 	return {
@@ -1041,5 +1067,7 @@ export function createSessionController({
 		takeOver,
 		release,
 		openSessionId,
+		loadFullHistory,
+		isHistoryFullyLoaded: () => historyFullyLoaded,
 	};
 }
