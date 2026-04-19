@@ -3,17 +3,72 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@m
 import { Type, type Static } from "@sinclair/typebox";
 import { askSingleQuestionWithInlineNote } from "pi-ask-tool-extension/src/ask-inline-ui.ts";
 import { askQuestionsWithTabs } from "pi-ask-tool-extension/src/ask-tabs-ui.ts";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 
 const execFile = promisify(execFileCb);
 
 const GIT_MAX_BUFFER_BYTES = 80 * 1024 * 1024;
 const SNAPSHOT_SECTION_MAX_CHARS = 12_000;
 const SNAPSHOT_UNTRACKED_CHARS = 24_000;
+const REVIEW_SETTINGS_FILE = join(homedir(), ".pi", "agent", "review-settings.json");
+
+interface ReviewSettingsFile {
+	defaultModel?: string | null;
+}
+
+function formatModelValue(model: { provider: string; id: string }): string {
+	return `${model.provider}/${model.id}`;
+}
+
+function normalizeModelValue(value: string | undefined | null): string | undefined {
+	const trimmed = String(value ?? "").trim();
+	return trimmed || undefined;
+}
+
+function parseModelValue(value: string | undefined | null): { provider: string; id: string } | null {
+	const normalized = normalizeModelValue(value);
+	if (!normalized) return null;
+	const slashIndex = normalized.indexOf("/");
+	if (slashIndex <= 0 || slashIndex >= normalized.length - 1) return null;
+	return {
+		provider: normalized.slice(0, slashIndex),
+		id: normalized.slice(slashIndex + 1),
+	};
+}
+
+function formatModelOptionLabel(model: { provider: string; id: string; name?: string }): string {
+	const value = formatModelValue(model);
+	const label = String(model.name || model.id || "").trim();
+	return label && label !== value ? `${label} · ${value}` : value;
+}
+
+async function readReviewSettings(): Promise<ReviewSettingsFile> {
+	try {
+		const raw = await readFile(REVIEW_SETTINGS_FILE, "utf8");
+		const parsed = JSON.parse(raw) as ReviewSettingsFile;
+		return { defaultModel: normalizeModelValue(parsed?.defaultModel ?? undefined) ?? null };
+	} catch {
+		return { defaultModel: null };
+	}
+}
+
+async function writeReviewSettings(settings: ReviewSettingsFile): Promise<void> {
+	await mkdir(dirname(REVIEW_SETTINGS_FILE), { recursive: true });
+	await writeFile(REVIEW_SETTINGS_FILE, `${JSON.stringify({ defaultModel: normalizeModelValue(settings.defaultModel ?? undefined) ?? null }, null, 2)}\n`, "utf8");
+}
+
+async function getStoredReviewModelValue(): Promise<string | undefined> {
+	return normalizeModelValue((await readReviewSettings()).defaultModel ?? undefined);
+}
+
+async function setStoredReviewModelValue(value: string | undefined): Promise<void> {
+	await writeReviewSettings({ defaultModel: normalizeModelValue(value) ?? null });
+}
 
 function splitReviewArgs(rawArgs: string): string[] {
 	const args = String(rawArgs ?? "").trim();
@@ -109,9 +164,14 @@ const ReviewRunSchema = Type.Object({
 	commitRef: Type.Optional(Type.String({ description: "Commit ref when mode=commit" })),
 	baseRef: Type.Optional(Type.String({ description: "Base branch/ref when mode=branch" })),
 	instructions: Type.Optional(Type.String({ description: "Extra review focus or custom review instructions" })),
+	model: Type.Optional(Type.String({ description: "Model override for this review. Use provider/id or 'session'." })),
 });
 
 type ReviewRunParams = Static<typeof ReviewRunSchema>;
+
+type ParsedReviewCommand =
+	| { kind: "run"; params: ReviewRunParams | null; modelOverride?: string }
+	| { kind: "model"; arg?: string };
 
 function trimText(value: string, maxChars: number): { text: string; truncated: boolean } {
 	if (value.length <= maxChars) return { text: value, truncated: false };
@@ -149,11 +209,13 @@ function buildDisplayReport(options: {
 	targetLabel: string;
 	branch: string;
 	instructions?: string;
+	modelLabel: string;
 	reviewText: string;
 }): string {
 	return [
 		`## Review: ${options.targetLabel}`,
 		`- Mode: ${options.mode}`,
+		`- Model: ${options.modelLabel}`,
 		`- Branch: ${options.branch}`,
 		`- Extra focus: ${stringifyFocus(options.instructions)}`,
 		"",
@@ -197,6 +259,84 @@ function extractTextMessage(content: unknown): string {
 
 async function ensureRefExists(cwd: string, ref: string): Promise<void> {
 	await runGit(cwd, ["cat-file", "-e", `${ref}^{commit}`]);
+}
+
+async function chooseReviewModelSelector(ctx: Pick<ExtensionCommandContext, "model" | "modelRegistry" | "ui">): Promise<string | undefined | null> {
+	const available = await ctx.modelRegistry.getAvailable();
+	const optionMap = new Map<string, string | undefined>();
+	const options: string[] = [];
+	const storedDefault = await getStoredReviewModelValue();
+
+	if (storedDefault) {
+		const label = `Saved review default · ${storedDefault}`;
+		optionMap.set(label, undefined);
+		options.push(label);
+	}
+
+	if (ctx.model) {
+		const sessionValue = formatModelValue(ctx.model);
+		const label = `Current session model · ${sessionValue}`;
+		optionMap.set(label, "session");
+		options.push(label);
+	}
+
+	const seenValues = new Set(options.map((label) => optionMap.get(label)).filter(Boolean));
+	const sortedModels = [...available].sort((a, b) => formatModelOptionLabel(a).localeCompare(formatModelOptionLabel(b)));
+	for (const model of sortedModels) {
+		const value = formatModelValue(model);
+		if (seenValues.has(value)) continue;
+		const label = formatModelOptionLabel(model);
+		optionMap.set(label, value);
+		options.push(label);
+		seenValues.add(value);
+	}
+
+	if (options.length === 0) return undefined;
+	const selected = await ctx.ui.select("Which model should I use for this review?", options);
+	if (selected === undefined) return null;
+	return optionMap.get(selected);
+}
+
+async function resolveSpecificReviewModel(ctx: Pick<ExtensionContext, "modelRegistry">, value: string): Promise<{ model: any; modelValue: string }> {
+	const parsed = parseModelValue(value);
+	if (!parsed) {
+		throw new Error(`Invalid model "${value}". Use provider/id.`);
+	}
+	const model = ctx.modelRegistry.find(parsed.provider, parsed.id);
+	if (!model) {
+		throw new Error(`Review model not found: ${value}`);
+	}
+	return { model, modelValue: formatModelValue(model) };
+}
+
+async function resolveReviewModelForRun(ctx: Pick<ExtensionContext, "model" | "modelRegistry"> & { hasUI?: boolean; ui?: { notify(message: string, level?: "info" | "warning" | "error" | "success"): void } }, selector?: string): Promise<{ model: any; modelValue: string; source: "explicit" | "stored-default" | "session" }> {
+	const normalizedSelector = normalizeModelValue(selector);
+	if (normalizedSelector === "session") {
+		if (!ctx.model) throw new Error("No current session model is selected");
+		return { model: ctx.model, modelValue: formatModelValue(ctx.model), source: "session" };
+	}
+	if (normalizedSelector) {
+		const resolved = await resolveSpecificReviewModel(ctx, normalizedSelector);
+		return { ...resolved, source: "explicit" };
+	}
+
+	const storedDefault = await getStoredReviewModelValue();
+	if (storedDefault) {
+		try {
+			const resolved = await resolveSpecificReviewModel(ctx, storedDefault);
+			return { ...resolved, source: "stored-default" };
+		} catch (error) {
+			if (ctx.hasUI && ctx.ui) {
+				ctx.ui.notify(`Saved review model ${storedDefault} is unavailable; falling back to the current session model.`, "warning");
+			}
+		}
+	}
+
+	if (ctx.model) {
+		return { model: ctx.model, modelValue: formatModelValue(ctx.model), source: "session" };
+	}
+
+	throw new Error("No review model available. Set one with /review model <provider/id> or pick a session model.");
 }
 
 async function runGit(cwd: string, args: string[]): Promise<string> {
@@ -339,14 +479,11 @@ async function buildReviewSnapshot(cwd: string, params: ReviewRunParams): Promis
 	};
 }
 
-async function performReview(pi: ExtensionAPI, ctx: Pick<ExtensionContext, "cwd" | "model" | "modelRegistry">, params: ReviewRunParams): Promise<{ requestId: string; report: string; targetLabel: string; branch: string; repoRoot: string }> {
-	if (!ctx.model) {
-		throw new Error("No model selected");
-	}
-
-	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
+async function performReview(pi: ExtensionAPI, ctx: Pick<ExtensionContext, "cwd" | "model" | "modelRegistry"> & { hasUI?: boolean; ui?: { notify(message: string, level?: "info" | "warning" | "error" | "success"): void } }, params: ReviewRunParams): Promise<{ requestId: string; report: string; targetLabel: string; branch: string; repoRoot: string }> {
+	const resolvedModel = await resolveReviewModelForRun(ctx, params.model);
+	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(resolvedModel.model);
 	if (!auth.ok || !auth.apiKey) {
-		throw new Error(auth.ok ? `No API key for ${ctx.model.provider}` : auth.error);
+		throw new Error(auth.ok ? `No API key for ${resolvedModel.model.provider}` : auth.error);
 	}
 
 	const { repoRoot, branch, targetLabel, snapshot } = await buildReviewSnapshot(ctx.cwd, params);
@@ -359,7 +496,7 @@ async function performReview(pi: ExtensionAPI, ctx: Pick<ExtensionContext, "cwd"
 	];
 
 	const result = await complete(
-		ctx.model,
+		resolvedModel.model,
 		{ systemPrompt: REVIEW_SYSTEM_PROMPT, messages },
 		{ apiKey: auth.apiKey, headers: auth.headers },
 	);
@@ -375,6 +512,7 @@ async function performReview(pi: ExtensionAPI, ctx: Pick<ExtensionContext, "cwd"
 		targetLabel,
 		branch,
 		instructions: params.instructions,
+		modelLabel: resolvedModel.modelValue,
 		reviewText,
 	});
 
@@ -390,6 +528,7 @@ async function performReview(pi: ExtensionAPI, ctx: Pick<ExtensionContext, "cwd"
 				branch,
 				extraFocus: params.instructions ?? "",
 				repoRoot,
+				model: resolvedModel.modelValue,
 			},
 		},
 		{ triggerTurn: false },
@@ -398,8 +537,31 @@ async function performReview(pi: ExtensionAPI, ctx: Pick<ExtensionContext, "cwd"
 	return { requestId, report, targetLabel, branch, repoRoot };
 }
 
-function parseInlineReviewArgs(rawArgs: string): ReviewRunParams | null {
-	const tokens = splitReviewArgs(rawArgs);
+function parseReviewFlags(tokens: string[]): { tokens: string[]; modelOverride?: string } {
+	const remaining: string[] = [];
+	let modelOverride: string | undefined;
+
+	for (let index = 0; index < tokens.length; index += 1) {
+		const token = tokens[index];
+		if (token === "--model" || token === "-m") {
+			const next = tokens[index + 1];
+			if (next) {
+				modelOverride = stripOuterQuotes(next);
+				index += 1;
+			}
+			continue;
+		}
+		if (token.startsWith("--model=")) {
+			modelOverride = stripOuterQuotes(token.slice("--model=".length));
+			continue;
+		}
+		remaining.push(token);
+	}
+
+	return { tokens: remaining, modelOverride: normalizeModelValue(modelOverride) };
+}
+
+function parseReviewRunArgsFromTokens(tokens: string[], modelOverride?: string): ReviewRunParams | null {
 	if (!tokens.length) return null;
 
 	const [modeToken, ...restTokens] = tokens;
@@ -410,28 +572,31 @@ function parseInlineReviewArgs(rawArgs: string): ReviewRunParams | null {
 		return {
 			mode: "working-tree",
 			instructions: restTokens.join(" ").trim() || undefined,
+			model: modelOverride,
 		};
 	}
 
 	if (mode === "commit") {
 		const [commitRefRaw, ...focusTokens] = restTokens;
 		const commitRef = normalizeToken(commitRefRaw || "");
-		if (!commitRef) return { mode: "commit", commitRef: "" };
+		if (!commitRef) return { mode: "commit", commitRef: "", model: modelOverride };
 		return {
 			mode: "commit",
 			commitRef,
 			instructions: focusTokens.join(" ").trim() || undefined,
+			model: modelOverride,
 		};
 	}
 
 	if (mode === "branch") {
 		const [baseRefRaw, ...focusTokens] = restTokens;
 		const baseRef = normalizeToken(baseRefRaw || "");
-		if (!baseRef) return { mode: "branch", baseRef: "" };
+		if (!baseRef) return { mode: "branch", baseRef: "", model: modelOverride };
 		return {
 			mode: "branch",
 			baseRef,
 			instructions: focusTokens.join(" ").trim() || undefined,
+			model: modelOverride,
 		};
 	}
 
@@ -439,10 +604,25 @@ function parseInlineReviewArgs(rawArgs: string): ReviewRunParams | null {
 		return {
 			mode: "custom",
 			instructions: restTokens.join(" ").trim() || undefined,
+			model: modelOverride,
 		};
 	}
 
-	return { mode: "custom", instructions: tokens.slice(1).join(" ").trim() || normalizeToken(modeToken) };
+	return {
+		mode: "custom",
+		instructions: tokens.slice(1).join(" ").trim() || normalizeToken(modeToken),
+		model: modelOverride,
+	};
+}
+
+function parseReviewCommandInput(rawArgs: string): ParsedReviewCommand | null {
+	const tokens = splitReviewArgs(rawArgs);
+	if (!tokens.length) return null;
+	if (tokens[0]?.toLowerCase() === "model") {
+		return { kind: "model", arg: tokens.slice(1).join(" ").trim() || undefined };
+	}
+	const { tokens: remainingTokens, modelOverride } = parseReviewFlags(tokens);
+	return { kind: "run", params: parseReviewRunArgsFromTokens(remainingTokens, modelOverride), modelOverride };
 }
 
 function selectionToText(selection: { selectedOptions: string[]; customInput?: string } | undefined): string {
@@ -453,7 +633,7 @@ function selectionToText(selection: { selectedOptions: string[]; customInput?: s
 	return parts.join(", ").trim();
 }
 
-async function collectReviewParamsViaAsk(ctx: ExtensionCommandContext): Promise<ReviewRunParams | null> {
+async function collectReviewParamsViaAsk(ctx: ExtensionCommandContext, modelOverride?: string): Promise<ReviewRunParams | null> {
 	if (!ctx.hasUI) return null;
 
 	const preset = await askSingleQuestionWithInlineNote(ctx.ui, {
@@ -527,28 +707,132 @@ async function collectReviewParamsViaAsk(ctx: ExtensionCommandContext): Promise<
 		instructions = instructions ? `${instructions}, ${focus}` : focus;
 	}
 
-	return { mode, commitRef, baseRef, instructions };
+	let model = normalizeModelValue(modelOverride);
+	if (!model) {
+		const selectedModel = await chooseReviewModelSelector(ctx);
+		if (selectedModel === null) return null;
+		model = normalizeModelValue(selectedModel);
+	}
+
+	return { mode, commitRef, baseRef, instructions, model };
+}
+
+const CLEAR_STORED_REVIEW_MODEL = "__clear_review_model__";
+
+async function promptForStoredReviewModel(ctx: ExtensionCommandContext): Promise<string | undefined | null> {
+	if (!ctx.hasUI) return undefined;
+	const available = await ctx.modelRegistry.getAvailable();
+	const options: string[] = [];
+	const optionMap = new Map<string, string | undefined>();
+	const currentStored = await getStoredReviewModelValue();
+	const seenValues = new Set<string>();
+
+	if (ctx.model) {
+		const sessionValue = formatModelValue(ctx.model);
+		const label = `Current session model · ${sessionValue}`;
+		optionMap.set(label, sessionValue);
+		options.push(label);
+		seenValues.add(sessionValue);
+	}
+
+	const sortedModels = [...available].sort((a, b) => formatModelOptionLabel(a).localeCompare(formatModelOptionLabel(b)));
+	for (const model of sortedModels) {
+		const value = formatModelValue(model);
+		if (seenValues.has(value)) continue;
+		const label = formatModelOptionLabel(model);
+		optionMap.set(label, value);
+		options.push(label);
+		seenValues.add(value);
+	}
+
+	if (currentStored) {
+		const clearLabel = `Clear saved review default (currently ${currentStored})`;
+		optionMap.set(clearLabel, CLEAR_STORED_REVIEW_MODEL);
+		options.push(clearLabel);
+	}
+
+	if (options.length === 0) return undefined;
+	const selected = await ctx.ui.select("Set the default model for /review", options);
+	if (selected === undefined) return null;
+	return optionMap.get(selected);
+}
+
+async function handleReviewModelCommand(ctx: ExtensionCommandContext, rawArg?: string): Promise<void> {
+	const normalizedArg = normalizeModelValue(rawArg);
+	if (!normalizedArg) {
+		const picked = await promptForStoredReviewModel(ctx);
+		if (picked === null) {
+			if (ctx.hasUI) ctx.ui.notify("Cancelled", "info");
+			return;
+		}
+		if (picked === undefined) {
+			const current = await getStoredReviewModelValue();
+			if (ctx.hasUI) ctx.ui.notify(current ? `Default review model: ${current}` : "No saved review model. /review falls back to the current session model.", "info");
+			return;
+		}
+		if (picked === CLEAR_STORED_REVIEW_MODEL) {
+			await setStoredReviewModelValue(undefined);
+			if (ctx.hasUI) ctx.ui.notify("Cleared the saved review model. /review will use the current session model unless you override it.", "info");
+			return;
+		}
+		await setStoredReviewModelValue(picked);
+		if (ctx.hasUI) ctx.ui.notify(`Saved ${picked} as the default model for /review.`, "info");
+		return;
+	}
+
+	const lowered = normalizedArg.toLowerCase();
+	if (lowered === "show" || lowered === "status") {
+		const current = await getStoredReviewModelValue();
+		if (ctx.hasUI) ctx.ui.notify(current ? `Default review model: ${current}` : "No saved review model. /review falls back to the current session model.", "info");
+		return;
+	}
+	if (lowered === "clear" || lowered === "none" || lowered === "session" || lowered === "current") {
+		await setStoredReviewModelValue(undefined);
+		if (ctx.hasUI) ctx.ui.notify("Cleared the saved review model. /review will use the current session model unless you override it.", "info");
+		return;
+	}
+
+	const resolved = await resolveSpecificReviewModel(ctx, normalizedArg);
+	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(resolved.model);
+	if (!auth.ok || !auth.apiKey) {
+		throw new Error(auth.ok ? `No API key for ${resolved.model.provider}` : auth.error);
+	}
+	await setStoredReviewModelValue(resolved.modelValue);
+	if (ctx.hasUI) ctx.ui.notify(`Saved ${resolved.modelValue} as the default model for /review.`, "info");
 }
 
 function reviewUsage(): string {
 	return [
 		"Usage:",
 		"/review",
-		"/review working-tree [extra focus]",
-		"/review commit <ref> [extra focus]",
-		"/review branch <base-ref> [extra focus]",
-		"/review custom <instructions>",
+		"/review [--model <provider/id>|session] working-tree [extra focus]",
+		"/review [--model <provider/id>|session] commit <ref> [extra focus]",
+		"/review [--model <provider/id>|session] branch <base-ref> [extra focus]",
+		"/review [--model <provider/id>|session] custom <instructions>",
+		"/review model",
+		"/review model <provider/id>",
+		"/review model clear",
 	].join("\n");
 }
 
 export default function reviewExtension(pi: ExtensionAPI) {
 	pi.registerCommand("review", {
-		description: "Review uncommitted changes, a commit, or a branch diff. With no args it uses the ask tool for setup.",
+		description: "Review uncommitted changes, a commit, or a branch diff. Supports a separate default review model and per-run model overrides.",
 		executeImmediately: true,
 		handler: async (args, ctx) => {
-			let parsed = parseInlineReviewArgs(args);
+			const parsedCommand = parseReviewCommandInput(args);
+			if (parsedCommand?.kind === "model") {
+				try {
+					await handleReviewModelCommand(ctx, parsedCommand.arg);
+				} catch (error) {
+					if (ctx.hasUI) ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+				}
+				return;
+			}
+
+			let parsed = parsedCommand?.params ?? null;
 			if (!parsed) {
-				parsed = await collectReviewParamsViaAsk(ctx);
+				parsed = await collectReviewParamsViaAsk(ctx, parsedCommand?.kind === "run" ? parsedCommand.modelOverride : undefined);
 				if (!parsed) {
 					if (ctx.hasUI) ctx.ui.notify("Cancelled", "info");
 					return;

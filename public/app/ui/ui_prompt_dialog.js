@@ -1,15 +1,19 @@
 export function createUiPromptDialog({ menuOverlay, menuScrim, menuPanel }) {
 	let activeCallback = null;
+	let activeUiId = null;
 
-	function close() {
+	function close(uiId = activeUiId) {
+		if (uiId && activeUiId && uiId !== activeUiId) return;
 		if (menuOverlay) menuOverlay.classList.remove("open");
 		if (menuPanel) menuPanel.innerHTML = "";
 		activeCallback = null;
+		activeUiId = null;
 	}
 
 	function showSelect(uiId, title, options, onSubmit) {
 		if (!menuOverlay || !menuPanel) return;
 		activeCallback = onSubmit;
+		activeUiId = uiId;
 		menuOverlay.classList.add("open");
 		menuPanel.innerHTML = "";
 		menuPanel.style.left = "50%";
@@ -70,6 +74,7 @@ export function createUiPromptDialog({ menuOverlay, menuScrim, menuPanel }) {
 	function showInput(uiId, title, placeholder, onSubmit) {
 		if (!menuOverlay || !menuPanel) return;
 		activeCallback = onSubmit;
+		activeUiId = uiId;
 		menuOverlay.classList.add("open");
 		menuPanel.innerHTML = "";
 		menuPanel.style.left = "50%";
@@ -123,6 +128,7 @@ export function createUiPromptDialog({ menuOverlay, menuScrim, menuPanel }) {
 	function showConfirm(uiId, title, message, onSubmit) {
 		if (!menuOverlay || !menuPanel) return;
 		activeCallback = onSubmit;
+		activeUiId = uiId;
 		menuOverlay.classList.add("open");
 		menuPanel.innerHTML = "";
 		menuPanel.style.left = "50%";
@@ -176,5 +182,12 @@ export function createUiPromptDialog({ menuOverlay, menuScrim, menuPanel }) {
 		menuPanel.appendChild(body);
 	}
 
-	return { showSelect, showInput, showConfirm, close };
+	function reconcile(pendingUiPromptIds = [], isController = true) {
+		if (!activeUiId) return;
+		const pending = Array.isArray(pendingUiPromptIds) ? pendingUiPromptIds : [];
+		if (isController && pending.includes(activeUiId)) return;
+		close(activeUiId);
+	}
+
+	return { showSelect, showInput, showConfirm, close, reconcile };
 }

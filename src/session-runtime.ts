@@ -42,6 +42,7 @@ import type {
 	ApiSessionTreeResponse,
 	ClientRole,
 	ApiSessionPatch,
+	DialogCloseReason,
 	SseEvent,
 	ApiTerminalClientMessage,
 	ApiTerminalServerMessage,
@@ -982,7 +983,8 @@ function serializeSessionSummary(entry: {
 }
 
 interface PendingAsk {
-	resolve: (value: { cancelled?: boolean; selections: Array<{ selectedOptions: string[]; customInput?: string }> }) => void;
+	resolve: (value: { cancelled?: boolean; selections: Array<{ selectedOptions: string[]; customInput?: string }> }) => boolean;
+	close: (reason: DialogCloseReason) => boolean;
 	sessionId: string;
 	questions: ApiAskQuestion[];
 }
@@ -990,7 +992,8 @@ interface PendingAsk {
 type PendingUiPromptEvent = Extract<SseEvent, { type: "ui_select" | "ui_input" | "ui_confirm" }>;
 
 interface PendingUiPrompt {
-	resolve: (value: string | undefined) => void;
+	resolve: (value: string | undefined) => boolean;
+	close: (reason: DialogCloseReason) => boolean;
 	sessionId: string;
 	event: PendingUiPromptEvent;
 }
@@ -1111,22 +1114,25 @@ export class PiWebRuntime {
 
 					const result = await new Promise<{ cancelled?: boolean; selections: Array<{ selectedOptions: string[]; customInput?: string }> }>((resolve) => {
 						let done = false;
-						let timeout: ReturnType<typeof setTimeout> | null = null;
-						const onAbort = () => finish({ cancelled: true, selections: [] });
 						const finish = (value: { cancelled?: boolean; selections: Array<{ selectedOptions: string[]; customInput?: string }> }) => {
-							if (done) return;
+							if (done) return false;
 							done = true;
 							self.pendingAsks.delete(askId);
-							if (timeout) clearTimeout(timeout);
 							if (signal && typeof signal.removeEventListener === "function") {
 								signal.removeEventListener("abort", onAbort);
 							}
 							resolve(value);
+							return true;
 						};
-						self.pendingAsks.set(askId, { resolve: finish, sessionId, questions });
+						const close = (reason: DialogCloseReason) => {
+							const closed = finish({ cancelled: true, selections: [] });
+							if (closed) self.sendToController(sessionId, { type: "ask_closed", askId, reason });
+							return closed;
+						};
+						const onAbort = () => close("aborted");
+						self.pendingAsks.set(askId, { resolve: finish, close, sessionId, questions });
 						self.sendToController(sessionId, { type: "ask_request", askId, questions });
-						timeout = setTimeout(() => finish({ cancelled: true, selections: [] }), 5 * 60 * 1000);
-						if (signal?.aborted) finish({ cancelled: true, selections: [] });
+						if (signal?.aborted) close("aborted");
 						else if (signal && typeof signal.addEventListener === "function") signal.addEventListener("abort", onAbort, { once: true });
 					});
 
@@ -1162,78 +1168,67 @@ export class PiWebRuntime {
 		}
 	}
 
-	resolveAsk(sessionId: string, askId: string, cancelled: boolean, selections: Array<{ selectedOptions: string[]; customInput?: string }>): void {
+	resolveAsk(sessionId: string, askId: string, cancelled: boolean, selections: Array<{ selectedOptions: string[]; customInput?: string }>): boolean {
 		const pending = this.pendingAsks.get(askId);
-		if (!pending || pending.sessionId !== sessionId) return;
-		this.pendingAsks.delete(askId);
-		pending.resolve({ cancelled, selections });
+		if (!pending || pending.sessionId !== sessionId) return false;
+		return pending.resolve({ cancelled, selections });
 	}
 
-	resolveUiPrompt(sessionId: string, uiId: string, cancelled: boolean, value?: string): void {
+	resolveUiPrompt(sessionId: string, uiId: string, cancelled: boolean, value?: string): boolean {
 		const pending = this.pendingUiPrompts.get(uiId);
-		if (!pending || pending.sessionId !== sessionId) return;
-		this.pendingUiPrompts.delete(uiId);
-		pending.resolve(cancelled ? undefined : value);
+		if (!pending || pending.sessionId !== sessionId) return false;
+		return pending.resolve(cancelled ? undefined : value);
 	}
 
-	private cancelPendingDialogsForSession(sessionId: string): void {
-		for (const [askId, pending] of this.pendingAsks.entries()) {
+	private cancelPendingDialogsForSession(sessionId: string, reason: DialogCloseReason = "aborted"): void {
+		for (const pending of this.pendingAsks.values()) {
 			if (pending.sessionId !== sessionId) continue;
-			this.pendingAsks.delete(askId);
-			pending.resolve({ cancelled: true, selections: [] });
+			pending.close(reason);
 		}
-		for (const [uiId, pending] of this.pendingUiPrompts.entries()) {
+		for (const pending of this.pendingUiPrompts.values()) {
 			if (pending.sessionId !== sessionId) continue;
-			this.pendingUiPrompts.delete(uiId);
-			pending.resolve(undefined);
+			pending.close(reason);
 		}
 	}
 
 	private createWebUIContext(sessionId: string): any {
 		const self = this;
+		const waitForUiPrompt = (event: PendingUiPromptEvent): Promise<string | undefined> => {
+			const uiId = event.uiId;
+			return new Promise<string | undefined>((resolve) => {
+				let done = false;
+				const finish = (value: string | undefined) => {
+					if (done) return false;
+					done = true;
+					self.pendingUiPrompts.delete(uiId);
+					resolve(value);
+					return true;
+				};
+				const close = (reason: DialogCloseReason) => {
+					const closed = finish(undefined);
+					if (closed) self.sendToController(sessionId, { type: "ui_prompt_closed", uiId, reason });
+					return closed;
+				};
+				self.pendingUiPrompts.set(uiId, { resolve: finish, close, sessionId, event });
+				self.sendToController(sessionId, event);
+			});
+		};
 		return {
 			async select(title: string, options: string[]): Promise<string | undefined> {
 				const uiId = randomUUID();
 				const event: PendingUiPromptEvent = { type: "ui_select", uiId, title, options };
-				return new Promise<string | undefined>((resolve) => {
-					self.pendingUiPrompts.set(uiId, { resolve, sessionId, event });
-					self.sendToController(sessionId, event);
-					setTimeout(() => {
-						if (self.pendingUiPrompts.has(uiId)) {
-							self.pendingUiPrompts.delete(uiId);
-							resolve(undefined);
-						}
-					}, 5 * 60 * 1000);
-				});
+				return waitForUiPrompt(event);
 			},
 			async confirm(title: string, message: string): Promise<boolean> {
 				const uiId = randomUUID();
 				const event: PendingUiPromptEvent = { type: "ui_confirm", uiId, title, message };
-				const result = await new Promise<string | undefined>((resolve) => {
-					self.pendingUiPrompts.set(uiId, { resolve, sessionId, event });
-					self.sendToController(sessionId, event);
-					setTimeout(() => {
-						if (self.pendingUiPrompts.has(uiId)) {
-							self.pendingUiPrompts.delete(uiId);
-							resolve(undefined);
-						}
-					}, 5 * 60 * 1000);
-				});
+				const result = await waitForUiPrompt(event);
 				return result === "true";
 			},
 			async input(title: string, placeholder?: string): Promise<string | undefined> {
 				const uiId = randomUUID();
 				const event: PendingUiPromptEvent = { type: "ui_input", uiId, title, placeholder };
-				return new Promise<string | undefined>((resolve) => {
-					self.pendingUiPrompts.set(uiId, { resolve, sessionId, event });
-					self.sendToController(sessionId, event);
-					setTimeout(() => {
-						if (self.pendingUiPrompts.has(uiId)) {
-							self.pendingUiPrompts.delete(uiId);
-							resolve(undefined);
-						}
-					}, 5 * 60 * 1000);
-				});
+				return waitForUiPrompt(event);
 			},
 			notify(message: string, type?: "info" | "warning" | "error") {
 				self.broadcast(sessionId, { type: "ui_notify", message, level: type ?? "info" });
@@ -1249,16 +1244,7 @@ export class PiWebRuntime {
 			async editor(title: string, defaultValue?: string): Promise<string | undefined> {
 				const uiId = randomUUID();
 				const event: PendingUiPromptEvent = { type: "ui_input", uiId, title, placeholder: defaultValue };
-				return new Promise<string | undefined>((resolve) => {
-					self.pendingUiPrompts.set(uiId, { resolve, sessionId, event });
-					self.sendToController(sessionId, event);
-					setTimeout(() => {
-						if (self.pendingUiPrompts.has(uiId)) {
-							self.pendingUiPrompts.delete(uiId);
-							resolve(undefined);
-						}
-					}, 5 * 60 * 1000);
-				});
+				return waitForUiPrompt(event);
 			},
 			async custom(title: string, options: Array<{ label: string; value: unknown } | string>) {
 				// Fallback for clarify dialogs and other custom UIs — use the working select UI
@@ -1443,7 +1429,14 @@ export class PiWebRuntime {
 		if (!runtime) {
 			throw new Error("session_not_running");
 		}
-		return buildState(runtime.session, runtime.cwd, includeFullHistory, runtime.startAgent, messageLimit);
+		const state = buildState(runtime.session, runtime.cwd, includeFullHistory, runtime.startAgent, messageLimit);
+		state.pendingAskIds = [...this.pendingAsks.entries()]
+			.filter(([, pending]) => pending.sessionId === sessionId)
+			.map(([askId]) => askId);
+		state.pendingUiPromptIds = [...this.pendingUiPrompts.entries()]
+			.filter(([, pending]) => pending.sessionId === sessionId)
+			.map(([uiId]) => uiId);
+		return state;
 	}
 
 	getSessionTree(sessionId: string): ApiSessionTreeResponse {
@@ -1665,7 +1658,7 @@ export class PiWebRuntime {
 		}
 
 		if (command.type === "abort") {
-			this.cancelPendingDialogsForSession(sessionId);
+			this.cancelPendingDialogsForSession(sessionId, "aborted");
 			await runtime.session.abort();
 			return;
 		}
@@ -1675,7 +1668,9 @@ export class PiWebRuntime {
 			const askId = typeof command.askId === "string" ? command.askId.trim() : "";
 			if (!askId) throw new Error("missing_ask_id");
 			const selections = Array.isArray(command.selections) ? command.selections : [];
-			this.resolveAsk(sessionId, askId, Boolean(command.cancelled), selections);
+			if (!this.resolveAsk(sessionId, askId, Boolean(command.cancelled), selections)) {
+				throw new Error("ask_not_pending");
+			}
 			return;
 		}
 
@@ -1683,7 +1678,9 @@ export class PiWebRuntime {
 			this.assertController(runtime, command.clientId);
 			const uiId = typeof command.uiId === "string" ? command.uiId.trim() : "";
 			if (!uiId) throw new Error("missing_ui_id");
-			this.resolveUiPrompt(sessionId, uiId, Boolean(command.cancelled), command.value);
+			if (!this.resolveUiPrompt(sessionId, uiId, Boolean(command.cancelled), command.value)) {
+				throw new Error("ui_prompt_not_pending");
+			}
 			return;
 		}
 
@@ -1847,7 +1844,7 @@ export class PiWebRuntime {
 		this.assertController(runtime, request.clientId);
 
 		this.broadcast(sessionId, { type: "released", byClientId: request.clientId });
-		this.cancelPendingDialogsForSession(sessionId);
+		this.cancelPendingDialogsForSession(sessionId, "released");
 
 		for (const client of runtime.clients.values()) {
 			client.close();
@@ -1876,7 +1873,7 @@ export class PiWebRuntime {
 		if (!runtime) return;
 
 		this.broadcast(sessionId, { type: "released", byClientId: "system" });
-		this.cancelPendingDialogsForSession(sessionId);
+		this.cancelPendingDialogsForSession(sessionId, "released");
 
 		for (const client of runtime.clients.values()) {
 			client.close();

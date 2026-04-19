@@ -21,6 +21,14 @@ function extractImagesFromContent(content) {
 	return images;
 }
 
+const integerFormatter = new Intl.NumberFormat();
+
+function formatInteger(value) {
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed)) return "";
+	return integerFormatter.format(Math.max(0, Math.round(parsed)));
+}
+
 // ── Subagent card helpers ─────────────────────────────────────────────────────
 
 function saFormatTokens(n) {
@@ -153,6 +161,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 	let appendedUserMessageKeys = new Set();
 	let appendedAssistantMessageKeys = new Set();
 	let appendedBashMessageKeys = new Set();
+	let appendedSystemMessageKeys = new Set();
 	let optimisticUserSummaries = [];
 	let recentUserFingerprints = [];
 	let subagentCards = new Map();
@@ -296,7 +305,6 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 	if (msgsEl && !msgsEl.dataset.chatViewScrollBound) {
 		msgsEl.dataset.chatViewScrollBound = "1";
 		msgsEl.addEventListener("scroll", () => {
-			if (internalScroll) return;
 			autoStickToBottom = isNearBottom(msgsEl);
 		});
 	}
@@ -334,6 +342,7 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 		appendedUserMessageKeys = new Set();
 		appendedAssistantMessageKeys = new Set();
 		appendedBashMessageKeys = new Set();
+		appendedSystemMessageKeys = new Set();
 		optimisticUserSummaries = [];
 		recentUserFingerprints = [];
 		subagentCards = new Map();
@@ -593,6 +602,98 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 		block.appendChild(out);
 		msgsEl.appendChild(block);
 		if (shouldAutoStick()) scrollToBottom(true);
+	}
+
+	function systemMessageKey(prefix, message, extra = "") {
+		const ts = message && typeof message.timestamp === "number" ? message.timestamp : null;
+		const summary = typeof message?.summary === "string" ? message.summary : "";
+		const suffix = extra ? `${summary}|${extra}` : summary;
+		return ts !== null ? `${prefix}:${ts}:${suffix}` : `${prefix}:${suffix}`;
+	}
+
+	function maybeAppendBranchSummaryMessage(message) {
+		if (!message || message.role !== "branchSummary") return false;
+		const key = systemMessageKey("branch", message);
+		if (appendedSystemMessageKeys.has(key)) return true;
+		appendedSystemMessageKeys.add(key);
+		if (appendedSystemMessageKeys.size > 200) appendedSystemMessageKeys.clear();
+		const summary = typeof message.summary === "string" ? message.summary.trim() : "";
+		if (summary) appendInlineNotice(`Branch summary: ${summary}`);
+		return true;
+	}
+
+	function maybeAppendCompactionMessage(message) {
+		if (!message || message.role !== "compactionSummary") return false;
+		const key = systemMessageKey("compaction", message, String(message.tokensBefore ?? ""));
+		if (appendedSystemMessageKeys.has(key)) return true;
+		appendedSystemMessageKeys.add(key);
+		if (appendedSystemMessageKeys.size > 200) appendedSystemMessageKeys.clear();
+
+		const summary = typeof message.summary === "string" ? message.summary.trim() : "";
+		const tokensBefore = formatInteger(message.tokensBefore);
+		const previewText = tokensBefore ? `Compacted from ${tokensBefore} tokens` : "Compaction completed";
+		const hasSummary = Boolean(summary);
+		const stick = shouldAutoStick();
+
+		const card = document.createElement("div");
+		card.className = `tool-box compaction-card${hasSummary ? " collapsed" : ""}`;
+
+		const header = document.createElement("div");
+		header.className = `compaction-card-header${hasSummary ? "" : " static"}`;
+		if (hasSummary) header.tabIndex = 0;
+
+		const copy = document.createElement("div");
+		copy.className = "compaction-card-copy";
+		const title = document.createElement("div");
+		title.className = "compaction-card-title";
+		title.textContent = "[compaction]";
+		const preview = document.createElement("div");
+		preview.className = "compaction-card-preview";
+		preview.textContent = previewText;
+		copy.appendChild(title);
+		copy.appendChild(preview);
+		header.appendChild(copy);
+
+		const chev = document.createElement("span");
+		chev.className = "tool-header-chev";
+		chev.textContent = "▾";
+		header.appendChild(chev);
+		card.appendChild(header);
+
+		if (hasSummary) {
+			const hint = document.createElement("span");
+			hint.className = "compaction-card-hint";
+			preview.appendChild(document.createTextNode(" "));
+			preview.appendChild(hint);
+
+			const body = document.createElement("div");
+			body.className = "tool-body";
+			const summaryEl = document.createElement("div");
+			summaryEl.className = "md compaction-card-body";
+			renderMarkdown(summaryEl, summary);
+			body.appendChild(summaryEl);
+			card.appendChild(body);
+
+			const updateHint = () => {
+				const collapsed = card.classList.contains("collapsed");
+				hint.textContent = `(${isPhoneLikeFn() ? (collapsed ? "tap to expand" : "tap to collapse") : (collapsed ? "click to expand" : "click to collapse")})`;
+			};
+			const toggle = () => {
+				card.classList.toggle("collapsed");
+				updateHint();
+			};
+			updateHint();
+			header.addEventListener("click", toggle);
+			header.addEventListener("keydown", (event) => {
+				if (event.key !== "Enter" && event.key !== " ") return;
+				event.preventDefault();
+				toggle();
+			});
+		}
+
+		msgsEl.appendChild(card);
+		if (stick) scrollToBottom(true);
+		return true;
 	}
 
 	// Build a fake subagent-slash-result message from tool execution events
@@ -969,11 +1070,9 @@ export function createChatView({ msgsEl, isPhoneLikeFn, onReusePrompt }) {
 					tools.setResult(toolCallId, toolName, m);
 					tools.setImages(toolCallId, extractImagesFromContent(m.content));
 				} else if (m.role === "branchSummary") {
-					const summary = typeof m.summary === "string" ? m.summary : "";
-					if (summary) appendInlineNotice(`Branch summary: ${summary}`);
+					maybeAppendBranchSummaryMessage(m);
 				} else if (m.role === "compactionSummary") {
-					const summary = typeof m.summary === "string" ? m.summary : "";
-					if (summary) appendInlineNotice(`Compaction summary: ${summary}`);
+					maybeAppendCompactionMessage(m);
 				} else if (m.customType || m.role === "custom") {
 					if (upsertSubagentCard(m)) continue;
 					if (upsertReviewCard(m)) continue;

@@ -21,6 +21,14 @@ export interface ApiListReposResponse {
 	repos: string[];
 }
 
+export interface ApiReviewConfigResponse {
+	defaultModel: string | null;
+}
+
+export interface ApiReviewConfigRequest {
+	defaultModel: string | null;
+}
+
 export interface ApiImageContent {
 	type: "image";
 	data: string;
@@ -108,6 +116,8 @@ export interface ApiSessionState {
 	contextUsage: ApiContextUsage | null;
 	messages: AgentMessage[];
 	commands: ApiSessionCommand[];
+	pendingAskIds?: string[];
+	pendingUiPromptIds?: string[];
 }
 
 export interface ApiSessionTreeEntry {
@@ -240,7 +250,10 @@ export type ApiTerminalServerMessage =
 	| { type: "tab_closed"; tabId: string }
 	| { type: "error"; message: string; code?: string; tabId?: string };
 
+export type DialogCloseReason = "aborted" | "released";
+
 export type SseEvent =
+	| { type: "ping" }
 	| {
 			type: "init";
 			state: ApiSessionState;
@@ -253,7 +266,9 @@ export type SseEvent =
 	| { type: "controller_changed"; controllerClientId: string | null }
 	| { type: "released"; byClientId: string }
 	| { type: "ask_request"; askId: string; questions: ApiAskQuestion[] }
+	| { type: "ask_closed"; askId: string; reason: DialogCloseReason }
 	| { type: "ui_select"; uiId: string; title: string; options: string[] }
 	| { type: "ui_input"; uiId: string; title: string; placeholder?: string }
 	| { type: "ui_confirm"; uiId: string; title: string; message: string }
+	| { type: "ui_prompt_closed"; uiId: string; reason: DialogCloseReason }
 	| { type: "ui_notify"; message: string; level: "info" | "warning" | "error" };

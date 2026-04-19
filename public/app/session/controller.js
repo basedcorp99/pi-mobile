@@ -12,9 +12,11 @@ export function createSessionController({
 	onSidebarClose,
 	onSidebarRefresh,
 	onAskRequest,
+	onAskClosed,
 	onUiSelect,
 	onUiInput,
 	onUiConfirm,
+	onUiPromptClosed,
 	onReusePrompt,
 	onSessionEnded,
 	onUserTurn, // kept for direct notification when connected
@@ -296,6 +298,10 @@ export function createSessionController({
 	function handleSse(event) {
 		if (!event || typeof event.type !== "string") return;
 
+		if (event.type === "ping") {
+			return;
+		}
+
 		if (event.type === "init") {
 			const previousState = activeState;
 			const isReconnectInit = Boolean(
@@ -390,6 +396,14 @@ export function createSessionController({
 			return;
 		}
 
+		if (event.type === "ask_closed") {
+			if (controllerClientId !== clientId) return;
+			if (typeof onAskClosed === "function" && activeSessionId) {
+				onAskClosed(activeSessionId, event.askId, event.reason);
+			}
+			return;
+		}
+
 		if (event.type === "ui_select") {
 			if (controllerClientId !== clientId) return;
 			if (typeof onUiSelect === "function") {
@@ -410,6 +424,14 @@ export function createSessionController({
 			if (controllerClientId !== clientId) return;
 			if (typeof onUiConfirm === "function") {
 				onUiConfirm(event.uiId, event.title, event.message);
+			}
+			return;
+		}
+
+		if (event.type === "ui_prompt_closed") {
+			if (controllerClientId !== clientId) return;
+			if (typeof onUiPromptClosed === "function") {
+				onUiPromptClosed(event.uiId, event.reason);
 			}
 			return;
 		}
@@ -605,6 +627,11 @@ export function createSessionController({
 				chatView.appendNotice("This question moved to another client.", "warning");
 				return;
 			}
+			if (msg.includes("ask_not_pending")) {
+				await refreshState({ silent: true, syncMessages: false });
+				chatView.appendNotice("That question is no longer pending.", "warning");
+				return;
+			}
 			if (isSessionGoneError(error)) { handleSessionLost(); return; }
 			chatView.appendNotice(msg, "error");
 		}
@@ -625,6 +652,11 @@ export function createSessionController({
 			if (msg.includes("Not controller") || msg.includes("not_controller")) {
 				await refreshState({ silent: true, syncMessages: false });
 				chatView.appendNotice("This prompt moved to another client.", "warning");
+				return;
+			}
+			if (msg.includes("ui_prompt_not_pending")) {
+				await refreshState({ silent: true, syncMessages: false });
+				chatView.appendNotice("That prompt is no longer pending.", "warning");
 				return;
 			}
 			if (isSessionGoneError(error)) { handleSessionLost(); return; }

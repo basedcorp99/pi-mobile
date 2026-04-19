@@ -64,7 +64,7 @@ export function createAskDialog({ host, getSendOnEnter }) {
 		dialog.onSubmit(dialog.askId, cancelled, answerSelections);
 	}
 
-	function close(sessionId = activeSessionId, cancelled = false) {
+	function close(sessionId = activeSessionId, cancelled = false, askId = undefined) {
 		if (!sessionId) {
 			hideUi();
 			return;
@@ -74,6 +74,7 @@ export function createAskDialog({ host, getSendOnEnter }) {
 			if (sessionId === activeSessionId) hideUi();
 			return;
 		}
+		if (typeof askId === "string" && askId && dialog.askId !== askId) return;
 		dialogs.delete(sessionId);
 		if (sessionId === activeSessionId) hideUi();
 		if (cancelled) {
@@ -341,6 +342,17 @@ export function createAskDialog({ host, getSendOnEnter }) {
 		renderCurrent();
 	}
 
+	function reconcile(sessionId, pendingAskIds = []) {
+		const normalizedSessionId = typeof sessionId === "string" && sessionId.trim() ? sessionId.trim() : null;
+		if (!normalizedSessionId) return;
+		const dialog = dialogs.get(normalizedSessionId);
+		if (!dialog) return;
+		const pending = Array.isArray(pendingAskIds) ? pendingAskIds : [];
+		if (pending.includes(dialog.askId)) return;
+		dialogs.delete(normalizedSessionId);
+		if (normalizedSessionId === activeSessionId) hideUi();
+	}
+
 	function show(sessionId, askId, questions, onSubmit) {
 		if (!sessionId || typeof askId !== "string" || !Array.isArray(questions)) return;
 		const existing = dialogs.get(sessionId);
@@ -368,6 +380,7 @@ export function createAskDialog({ host, getSendOnEnter }) {
 	return {
 		show,
 		close,
+		reconcile,
 		setActiveSession,
 		isOpen: (sessionId) => (typeof sessionId === "string" ? dialogs.has(sessionId) : Boolean(getVisibleDialog())),
 	};

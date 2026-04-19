@@ -785,6 +785,8 @@ function updateControls() {
 	const canChangeSettings = hasSession && isController && !streaming && !actionBusy;
 	const hasPromptHistory = hasSession && getSessionPromptHistory(activeSessionId).length > 0;
 	askDialog?.setActiveSession?.(activeSessionId, isController);
+	askDialog?.reconcile?.(activeSessionId, activeState?.pendingAskIds || []);
+	uiPromptDialog?.reconcile?.(activeState?.pendingUiPromptIds || [], isController);
 	terminalPane?.syncSession?.({
 		sessionId: activeSessionId,
 		cwd: activeState?.cwd || "",
@@ -969,6 +971,10 @@ const sessionCtrl = createSessionController({
 			});
 		}
 	},
+	onAskClosed: (sessionId, askId) => {
+		if (sessionId) sidebarCtrl?.clearAttention?.(sessionId);
+		askDialog?.close?.(sessionId, false, askId);
+	},
 	onUiSelect: (uiId, title, options) => {
 		if (uiPromptDialog) {
 			uiPromptDialog.showSelect(uiId, title, options, (id, cancelled, value) => {
@@ -990,11 +996,15 @@ const sessionCtrl = createSessionController({
 			});
 		}
 	},
+	onUiPromptClosed: (uiId) => {
+		uiPromptDialog?.close?.(uiId);
+	},
 	onReusePrompt: (text) => {
 		reusePrompt(text);
 	},
 	onSessionEnded: (sessionId) => {
 		askDialog?.close?.(sessionId, false);
+		uiPromptDialog?.close?.();
 	},
 	loadFullHistory: LOAD_FULL_SESSION_HISTORY,
 	onUserTurn: (sessionId) => {
@@ -1150,7 +1160,8 @@ agentLauncher = createAgentLauncher({
 	onSubmit: (cmd) => void sessionCtrl.sendPrompt(cmd),
 });
 reviewLauncher = createReviewLauncher({
-	menuOverlay, menuPanel,
+	menuOverlay, menuPanel, api,
+	getActiveState: () => sessionCtrl.getActiveState(),
 	onSubmit: (cmd) => void sessionCtrl.sendPrompt(cmd),
 });
 branchLauncher = createSessionBranchLauncher({

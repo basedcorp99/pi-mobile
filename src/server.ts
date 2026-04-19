@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
-import { join, resolve, sep } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join, resolve, sep } from "node:path";
+import { homedir } from "node:os";
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { randomUUID, X509Certificate } from "node:crypto";
 import { PiWebRuntime, type SessionClient } from "./session-runtime.ts";
@@ -22,6 +23,8 @@ import type {
 	ApiListModelsResponse,
 	ApiListReposResponse,
 	ApiListSessionsResponse,
+	ApiReviewConfigRequest,
+	ApiReviewConfigResponse,
 	ApiNavigateTreeRequest,
 	ApiOkResponse,
 	ApiReleaseRequest,
@@ -233,7 +236,8 @@ function createSseStream(signal: AbortSignal) {
 			controller = c;
 			keepAlive = setInterval(() => {
 				if (!controller) return;
-				controller.enqueue(encoder.encode(`: ping\n\n`));
+				const ping: SseEvent = { type: "ping" };
+				controller.enqueue(encoder.encode(`data: ${JSON.stringify(ping)}\n\n`));
 			}, 5_000);
 		},
 		cancel() {
@@ -347,6 +351,34 @@ const vendorStaticFiles = new Map<string, { path: string; contentType?: string }
 
 function requireJsonBody(req: Request): Promise<Record<string, unknown>> {
 	return req.json().catch(() => ({}));
+}
+
+const REVIEW_CONFIG_FILE = join(homedir(), ".pi", "agent", "review-settings.json");
+
+function normalizeReviewModelValue(value: unknown): string | null {
+	const trimmed = typeof value === "string" ? value.trim() : "";
+	return trimmed || null;
+}
+
+function isValidReviewModelValue(value: string): boolean {
+	const slashIndex = value.indexOf("/");
+	return slashIndex > 0 && slashIndex < value.length - 1;
+}
+
+async function readReviewConfig(): Promise<ApiReviewConfigResponse> {
+	try {
+		const raw = await readFile(REVIEW_CONFIG_FILE, "utf8");
+		const parsed = JSON.parse(raw);
+		return { defaultModel: normalizeReviewModelValue(parsed?.defaultModel) };
+	} catch {
+		return { defaultModel: null };
+	}
+}
+
+async function writeReviewConfig(defaultModel: string | null): Promise<ApiReviewConfigResponse> {
+	await mkdir(dirname(REVIEW_CONFIG_FILE), { recursive: true });
+	await writeFile(REVIEW_CONFIG_FILE, `${JSON.stringify({ defaultModel }, null, 2)}\n`, "utf8");
+	return { defaultModel };
 }
 
 const DIRECTORY_SEARCH_LIMIT = 20;
@@ -779,6 +811,26 @@ Bun.serve({
 			const models = await runtime.listModels();
 			const body: ApiListModelsResponse = { models };
 			return json(body, 200);
+		}
+
+		if (req.method === "GET" && url.pathname === "/api/review/config") {
+			return json(await readReviewConfig(), 200);
+		}
+
+		if (req.method === "POST" && url.pathname === "/api/review/config") {
+			const raw = (await requireJsonBody(req)) as ApiReviewConfigRequest;
+			const defaultModel = normalizeReviewModelValue(raw?.defaultModel);
+			if (defaultModel !== null) {
+				if (!isValidReviewModelValue(defaultModel)) {
+					return errorResponse("Model must be in provider/id format", 400);
+				}
+				const models = await runtime.listModels();
+				const found = models.some((model) => `${model.provider}/${model.id}` === defaultModel);
+				if (!found) {
+					return errorResponse(`Model not found: ${defaultModel}`, 400);
+				}
+			}
+			return json(await writeReviewConfig(defaultModel), 200);
 		}
 
 		if (req.method === "GET" && url.pathname === "/api/active-sessions") {

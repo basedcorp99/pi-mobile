@@ -1856,6 +1856,61 @@
     .tool-box.collapsed .tool-header-chev { transform: rotate(-90deg); }
     .tool-box.collapsed .tool-body { display: none; }
     .tool-box.collapsed .tool-images { display: none; }
+    .compaction-card {
+      gap: 0;
+      background: rgba(168, 85, 247, 0.08);
+      border-color: rgba(168, 85, 247, 0.18);
+    }
+    .compaction-card-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .compaction-card-header.static { cursor: default; }
+    .compaction-card-header:focus-visible {
+      outline: 2px solid rgba(168, 85, 247, 0.35);
+      outline-offset: 3px;
+      border-radius: var(--radius-sm);
+    }
+    .compaction-card-header.static .tool-header-chev { display: none; }
+    .compaction-card-copy {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .compaction-card-title {
+      color: #c084fc;
+      font-family: "SF Mono", ui-monospace, Menlo, monospace;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .compaction-card-preview {
+      color: var(--text-primary);
+      font-size: 15px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .compaction-card-hint {
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+    .compaction-card .tool-header-chev {
+      margin-top: 4px;
+      color: rgba(192, 132, 252, 0.9);
+    }
+    .compaction-card .tool-body {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(168, 85, 247, 0.16);
+    }
+    .compaction-card-body { color: var(--text-body); }
     .tool-images {
       display: flex;
       flex-wrap: wrap;
@@ -2551,6 +2606,10 @@
     body.light .tool-box.pending { background: rgba(0, 0, 0, 0.02); border-color: var(--border); }
     body.light .tool-box.success { background: rgba(46, 125, 50, 0.04); border-color: rgba(46, 125, 50, 0.1); }
     body.light .tool-box.error { background: rgba(211, 47, 47, 0.04); border-color: rgba(211, 47, 47, 0.1); }
+    body.light .compaction-card { background: rgba(147, 51, 234, 0.05); border-color: rgba(147, 51, 234, 0.14); }
+    body.light .compaction-card-title { color: #7c3aed; }
+    body.light .compaction-card .tool-header-chev { color: rgba(124, 58, 237, 0.85); }
+    body.light .compaction-card .tool-body { border-top-color: rgba(147, 51, 234, 0.16); }
     body.light .md pre { background: var(--code-bg); border-color: var(--border); }
     body.light .md pre code { color: var(--text-body); }
     body.light .codeblock { background: var(--code-bg); border-color: var(--border); }

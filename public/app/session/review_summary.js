@@ -8,7 +8,9 @@ export function parseReviewSummaryMessage(message) {
 	const target = typeof details.targetLabel === "string" ? details.targetLabel : "code review";
 	const branch = typeof details.branch === "string" ? details.branch : "";
 	const focus = typeof details.extraFocus === "string" ? details.extraFocus.trim() : "";
+	const model = typeof details.model === "string" ? details.model.trim() : "";
 	const summaryParts = [mode, target];
+	if (model) summaryParts.push(model);
 	if (branch) summaryParts.push(branch);
 	if (focus) summaryParts.push(`focus: ${focus}`);
 	return {
