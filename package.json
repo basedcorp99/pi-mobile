@@ -9,7 +9,7 @@
 		"test:e2e": "playwright test"
 	},
 	"dependencies": {
-		"@mariozechner/pi-coding-agent": "~0.65.2",
+		"@mariozechner/pi-coding-agent": "*",
 		"@simplewebauthn/browser": "^13.2.2",
 		"@simplewebauthn/server": "^13.2.3",
 		"@xterm/addon-fit": "^0.11.0",
