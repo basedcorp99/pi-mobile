@@ -25,7 +25,8 @@ cd pi-mobile
 ```
 
 The setup script:
-- Installs bun dependencies
+- Installs `pi`, `pi-subagents`, and `pi-ask-tool-extension` globally via npm if missing
+- Installs bun dependencies for the web app itself
 - Creates a `pi-mobile` launcher in `~/.bin` and adds it to PATH
 - Installs a repo-owned systemd unit at `/etc/systemd/system/pi-mobile.service`
 - Enables + starts the `pi-mobile` service
@@ -33,6 +34,7 @@ The setup script:
 - Optionally installs voice transcription (Parakeet model, ~640MB)
 
 `pi-mobile` itself is a standalone web app repo, not a Pi package you should add to `~/.pi/agent/settings.json` under `packages`.
+At runtime, `pi-mobile` loads the system-installed `pi` package from your global npm directory, so the web UI tracks the same Pi version as your `pi` CLI.
 The `/review` extension source lives in `pi-extension/review.ts` and is copied into Pi's normal extension directory by `./setup.sh`.
 
 After setup:
@@ -59,7 +61,8 @@ See [RUNBOOK.md](./RUNBOOK.md) for systemd, Tailscale / Cloudflare / TLS / auth 
 ## Prerequisites
 
 - [bun](https://bun.sh) runtime
-- [pi](https://github.com/badlogic/pi-mono) coding agent
+- Node.js / npm (used by `./setup.sh` to install global Pi packages)
+- [pi](https://github.com/badlogic/pi-mono) coding agent if you are installing manually without `./setup.sh`
 
 Optional (for voice input):
 - python3, numpy, onnxruntime

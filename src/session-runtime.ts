@@ -1,31 +1,23 @@
-import {
-	AuthStorage,
-	createAgentSession,
-	DefaultResourceLoader,
-	getAgentDir,
-	ModelRegistry,
-	SessionManager,
-	SettingsManager,
-	readTool,
-	bashTool,
-	editTool,
-	writeTool,
-	grepTool,
-	findTool,
-	lsTool,
-	type AgentSession,
-	type AgentSessionEvent,
-} from "@mariozechner/pi-coding-agent";
 import { closeSync, existsSync, mkdirSync, openSync, readSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { type Model, type Api } from "@mariozechner/pi-ai";
-import type { AgentMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
-import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import {
+	type AgentMessage,
+	type AgentSession,
+	type AgentSessionEvent,
+	type Api,
+	type Model,
+	type PiAuthStorage,
+	type PiDefaultResourceLoader,
+	type PiModelRegistry,
+	type PiSessionManager,
+	type ThinkingLevel,
+} from "./pi-types.ts";
 import { SessionTerminalManager, type TerminalClient } from "./session-terminal.ts";
+import { getGlobalNpmRoot, loadSystemPiModule } from "./system-pi.ts";
 import type {
 	ApiAskQuestion,
 	ApiCommandRequest,
@@ -47,6 +39,31 @@ import type {
 	ApiTerminalClientMessage,
 	ApiTerminalServerMessage,
 } from "./types.ts";
+
+const piModule = await loadSystemPiModule();
+const {
+	AuthStorage,
+	createAgentSession,
+	createReadTool,
+	createBashTool,
+	createEditTool,
+	createWriteTool,
+	createGrepTool,
+	createFindTool,
+	createLsTool,
+	DefaultResourceLoader,
+	getAgentDir,
+	ModelRegistry,
+	SessionManager,
+	SettingsManager,
+	readTool,
+	bashTool,
+	editTool,
+	writeTool,
+	grepTool,
+	findTool,
+	lsTool,
+} = piModule;
 
 // ---------------------------------------------------------------------------
 // Worktree isolation guardrails
@@ -80,28 +97,70 @@ If the user explicitly asks you to do any of the above, comply — but reconfirm
 When your work is done, just commit to your branch. Merging into main is handled externally.
 `.trim();
 
-let cachedNpmRoot: string | null | undefined;
 let subagentManagementModulePromise: Promise<any | null> | null = null;
 let subagentSkillsModulePromise: Promise<any | null> | null = null;
+
+const BUILT_IN_TOOL_NAMES = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
+
+function parseVersionPart(part: string | undefined): number {
+	const match = String(part ?? "").match(/\d+/);
+	return match ? Number.parseInt(match[0] ?? "0", 10) : 0;
+}
+
+function usesNamedToolsApi(version: unknown): boolean {
+	if (typeof version === "string" && version.trim()) {
+		const [majorRaw, minorRaw] = version.trim().split(".", 3);
+		const major = parseVersionPart(majorRaw);
+		const minor = parseVersionPart(minorRaw);
+		if (major > 0) return true;
+		if (major === 0 && minor >= 70) return true;
+	}
+	return typeof readTool === "undefined";
+}
+
+const USE_NAMED_TOOLS_API = usesNamedToolsApi(piModule.VERSION);
 
 interface ResolvedStartAgentConfig {
 	name: string;
 	systemPrompt?: string;
-	tools?: unknown[];
+	tools?: string[];
 	model?: Model<Api>;
 	thinkingLevel?: ThinkingLevel;
 	extensions?: string[];
 }
 
-function getGlobalNpmRoot(): string | null {
-	if (cachedNpmRoot === undefined) {
-		try {
-			cachedNpmRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf-8", timeout: 3000 }).trim();
-		} catch {
-			cachedNpmRoot = null;
-		}
+function resolveLegacyTool(toolName: string, cwd: string): unknown {
+	switch (toolName) {
+		case "read":
+			return readTool ?? createReadTool?.(cwd);
+		case "bash":
+			return bashTool ?? createBashTool?.(cwd);
+		case "edit":
+			return editTool ?? createEditTool?.(cwd);
+		case "write":
+			return writeTool ?? createWriteTool?.(cwd);
+		case "grep":
+			return grepTool ?? createGrepTool?.(cwd);
+		case "find":
+			return findTool ?? createFindTool?.(cwd);
+		case "ls":
+			return lsTool ?? createLsTool?.(cwd);
+		default:
+			return undefined;
 	}
-	return cachedNpmRoot;
+}
+
+function resolveSessionToolSelection(cwd: string, toolNames: string[]): string[] | unknown[] | undefined {
+	const normalized = toolNames.map((name) => name.trim()).filter(Boolean);
+	if (normalized.length === 0) return undefined;
+	if (USE_NAMED_TOOLS_API) return normalized;
+
+	const mappedLegacyTools = normalized.map((name) => resolveLegacyTool(name, cwd)).filter(Boolean);
+	if (mappedLegacyTools.length === normalized.length) {
+		return mappedLegacyTools;
+	}
+
+	return normalized;
 }
 
 function normalizeThinkingLevel(value: unknown): ThinkingLevel | undefined {
@@ -112,7 +171,7 @@ function normalizeThinkingLevel(value: unknown): ThinkingLevel | undefined {
 		: undefined;
 }
 
-function resolveModelById(modelIdOrScope: string, modelRegistry: ModelRegistry): { model?: Model<Api>; thinkingLevel?: ThinkingLevel } {
+function resolveModelById(modelIdOrScope: string, modelRegistry: PiModelRegistry): { model?: Model<Api>; thinkingLevel?: ThinkingLevel } {
 	const trimmed = modelIdOrScope.trim();
 	if (!trimmed) return {};
 
@@ -168,7 +227,7 @@ async function loadSubagentSkillsModule() {
 async function resolveStartAgentConfig(
 	cwd: string,
 	startAgent: string | undefined,
-	modelRegistry: ModelRegistry,
+	modelRegistry: PiModelRegistry,
 ): Promise<ResolvedStartAgentConfig | null> {
 	const trimmed = typeof startAgent === "string" ? startAgent.trim() : "";
 	if (!trimmed) return null;
@@ -199,24 +258,11 @@ async function resolveStartAgentConfig(
 		}
 	}
 
-	let tools: unknown[] | undefined;
-	if (Array.isArray(selected.tools) && selected.tools.length > 0) {
-		const availableTools: Record<string, unknown> = {
-				read: readTool,
-				bash: bashTool,
-				edit: editTool,
-				write: writeTool,
-				grep: grepTool,
-				find: findTool,
-				ls: lsTool,
-		};
-		const mapped = selected.tools
-			.map((name: string) => availableTools[name])
-			.filter(Boolean);
-		if (mapped.length > 0) {
-			tools = mapped;
-		}
-	}
+	const tools = Array.isArray(selected.tools)
+		? selected.tools
+			.map((name: string) => name.trim())
+			.filter((name: string) => BUILT_IN_TOOL_NAMES.has(name))
+		: undefined;
 
 	let model: Model<Api> | undefined;
 	let thinkingLevel: ThinkingLevel | undefined;
@@ -247,7 +293,7 @@ async function resolveStartAgentConfig(
 	};
 }
 
-function buildSessionResourceLoader(cwd: string, startAgentConfig: ResolvedStartAgentConfig | null): DefaultResourceLoader {
+function buildSessionResourceLoader(cwd: string, startAgentConfig: ResolvedStartAgentConfig | null): PiDefaultResourceLoader {
 	const info = parseWorktreeInfo(cwd);
 	const agentDir = getAgentDir();
 	const settingsManager = SettingsManager.create(cwd, agentDir);
@@ -280,14 +326,15 @@ function buildSessionResourceLoader(cwd: string, startAgentConfig: ResolvedStart
 
 async function createSessionWithWorktreeGuard(opts: {
 	cwd: string;
-	sessionManager: SessionManager;
-	authStorage: AuthStorage;
-	modelRegistry: ModelRegistry;
+	sessionManager: PiSessionManager;
+	authStorage: PiAuthStorage;
+	modelRegistry: PiModelRegistry;
 	startAgent?: string;
 }): Promise<{ session: AgentSession; startAgentConfig: ResolvedStartAgentConfig | null }> {
 	const startAgentConfig = await resolveStartAgentConfig(opts.cwd, opts.startAgent, opts.modelRegistry);
 	const loader = buildSessionResourceLoader(opts.cwd, startAgentConfig);
 	if (loader) await loader.reload();
+	const tools = startAgentConfig?.tools ? resolveSessionToolSelection(opts.cwd, startAgentConfig.tools) : undefined;
 	const { session } = await createAgentSession({
 		cwd: opts.cwd,
 		authStorage: opts.authStorage,
@@ -295,10 +342,10 @@ async function createSessionWithWorktreeGuard(opts: {
 		sessionManager: opts.sessionManager,
 		settingsManager: SettingsManager.create(opts.cwd, getAgentDir()),
 		resourceLoader: loader,
-		...(startAgentConfig?.tools ? ({ tools: startAgentConfig.tools } as { tools: any[] }) : {}),
+		...(tools ? { tools } : {}),
 		...(startAgentConfig?.model ? { model: startAgentConfig.model } : {}),
 		...(startAgentConfig?.thinkingLevel ? { thinkingLevel: startAgentConfig.thinkingLevel } : {}),
-	});
+	} as any);
 	return { session, startAgentConfig };
 }
 
@@ -949,11 +996,11 @@ function readSessionHeaderCwd(path: string): string | null {
 	}
 }
 
-function openSessionManagerFast(path: string, sessionDir?: string): SessionManager {
+function openSessionManagerFast(path: string, sessionDir?: string): PiSessionManager {
 	const resolvedPath = resolve(path);
 	const dir = sessionDir ?? dirname(resolvedPath);
 	const cwd = readSessionHeaderCwd(resolvedPath) ?? process.cwd();
-	const SessionManagerCtor = SessionManager as unknown as new (cwd: string, sessionDir: string, sessionFile: string, persist: boolean) => SessionManager;
+	const SessionManagerCtor = SessionManager as unknown as new (cwd: string, sessionDir: string, sessionFile: string, persist: boolean) => PiSessionManager;
 	return new SessionManagerCtor(cwd, dir, resolvedPath, true);
 }
 

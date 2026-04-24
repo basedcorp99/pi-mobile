@@ -1,5 +1,4 @@
-import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage, AgentSessionEvent } from "./pi-types.ts";
 
 export type ClientRole = "controller" | "viewer";
 

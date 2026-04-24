@@ -1,3 +1,5 @@
+// Copied by setup.sh into ~/.pi/agent/extensions/review.ts.
+// This extension runs inside the system-installed Pi environment, not pi-mobile's local node_modules.
 import { complete, StringEnum, type Message } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type, type Static } from "@sinclair/typebox";

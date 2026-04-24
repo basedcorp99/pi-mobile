@@ -9,7 +9,6 @@
 		"test:e2e": "playwright test"
 	},
 	"dependencies": {
-		"@mariozechner/pi-coding-agent": "*",
 		"@simplewebauthn/browser": "^13.2.2",
 		"@simplewebauthn/server": "^13.2.3",
 		"@xterm/addon-fit": "^0.11.0",
@@ -18,7 +17,6 @@
 		"@xterm/xterm": "^6.0.0",
 		"marked": "^17.0.5",
 		"onnxruntime-node": "^1.24.3",
-		"pi-ask-tool-extension": "^0.2.4",
 		"web-push": "^3.6.7"
 	},
 	"devDependencies": {

@@ -2,16 +2,18 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
-import { execFile, execFileSync, spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID, X509Certificate } from "node:crypto";
 import { PiWebRuntime, type SessionClient } from "./session-runtime.ts";
 import { FaceIdService } from "./faceid.ts";
 import { PushService } from "./push.ts";
+import { getGlobalNpmRoot } from "./system-pi.ts";
 import { transcribeAudio, getVoiceStatus } from "./voice.ts";
 import { getVoiceNativeStatus, loadModels as loadVoiceModels } from "./voice-native.ts";
 
 // Resolve pi-subagents from npm global root (avoid hardcoding /usr/lib/...)
-const _npmGlobalRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf-8" }).trim();
+const _npmGlobalRoot = getGlobalNpmRoot();
+if (!_npmGlobalRoot) throw new Error("Unable to resolve npm global root required for pi-subagents");
 const { discoverAgentsAll } = await import(join(_npmGlobalRoot, "pi-subagents", "agents.ts"));
 import type {
 	ApiCommandRequest,

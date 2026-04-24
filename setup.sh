@@ -129,46 +129,75 @@ if [[ -z "$BUN_BIN" ]]; then
 fi
 ok "bun found: $($BUN_BIN --version)"
 
-# ── 2. Install deps ──────────────────────────────────────────────
-info "Installing dependencies..."
-cd "$SCRIPT_DIR"
-"$BUN_BIN" install --frozen-lockfile 2>/dev/null || "$BUN_BIN" install
-ok "Dependencies installed"
+require_npm() {
+  if command -v npm &>/dev/null; then
+    return 0
+  fi
 
-# ── 3. Check for pi + pi-subagents ────────────────────────────────
-check_install_global() {
-  local cmd="$1" pkg="$2"
-  if command -v "$cmd" &>/dev/null; then
-    ok "$cmd found: $("$cmd" --version 2>/dev/null || echo 'installed')"
-  else
-    info "$cmd not found — installing $pkg globally..."
-    npm install -g "$pkg"
-    if command -v "$cmd" &>/dev/null; then
-      ok "$cmd installed successfully"
+  err "npm is required because pi-mobile loads Pi from the global npm install"
+  err "Install Node.js/npm, then rerun ./setup.sh"
+  exit 1
+}
+
+resolve_npm_global_root() {
+  npm root -g 2>/dev/null || true
+}
+
+ensure_global_npm_package() {
+  local cmd="$1" pkg="$2" rel_dir="$3"
+  local pkg_dir="$NPM_GLOBAL_ROOT/$rel_dir"
+
+  if [[ -d "$pkg_dir" ]]; then
+    if [[ -n "$cmd" ]] && command -v "$cmd" &>/dev/null; then
+      ok "$pkg found globally: $pkg_dir ($("$cmd" --version 2>/dev/null | head -n1 || echo 'installed'))"
     else
-      warn "$cmd install may have succeeded but isn't in PATH yet — restart your shell"
+      ok "$pkg found globally: $pkg_dir"
+      if [[ -n "$cmd" ]]; then
+        warn "$cmd is not currently in PATH — pi-mobile will still use the global package directly"
+      fi
+    fi
+    return 0
+  fi
+
+  info "$pkg not found in global npm root — installing globally..."
+  npm install -g "$pkg"
+
+  if [[ ! -d "$pkg_dir" ]]; then
+    err "$pkg install did not create $pkg_dir"
+    return 1
+  fi
+
+  if [[ -n "$cmd" ]] && command -v "$cmd" &>/dev/null; then
+    ok "$pkg installed globally: $pkg_dir ($("$cmd" --version 2>/dev/null | head -n1 || echo 'installed'))"
+  else
+    ok "$pkg installed globally: $pkg_dir"
+    if [[ -n "$cmd" ]]; then
+      warn "$cmd was installed but is not yet in PATH — restart your shell if you want the CLI command"
     fi
   fi
 }
 
-check_install_global pi @mariozechner/pi-coding-agent
-check_install_global pi-subagents pi-subagents
+# ── 2. Check npm + global Pi packages ─────────────────────────────
+require_npm
+NPM_GLOBAL_ROOT="$(resolve_npm_global_root)"
+if [[ -z "$NPM_GLOBAL_ROOT" ]]; then
+  err "Could not resolve npm global root (npm root -g)"
+  exit 1
+fi
+ok "npm global root: $NPM_GLOBAL_ROOT"
+
+ensure_global_npm_package pi @mariozechner/pi-coding-agent "@mariozechner/pi-coding-agent"
+ensure_global_npm_package pi-subagents pi-subagents "pi-subagents"
+ensure_global_npm_package "" pi-ask-tool-extension "pi-ask-tool-extension"
 ensure_fuzzy_search_tools || true
 
-# Ensure pi-ask-tool-extension is available for the custom /review extension.
-ASK_EXT_ROOT="$(npm root -g 2>/dev/null || true)"
-if [[ -n "$ASK_EXT_ROOT" && -d "$ASK_EXT_ROOT/pi-ask-tool-extension" ]]; then
-  ok "pi-ask-tool-extension found: $ASK_EXT_ROOT/pi-ask-tool-extension"
-else
-  info "pi-ask-tool-extension not found — installing globally..."
-  npm install -g pi-ask-tool-extension
-  ASK_EXT_ROOT="$(npm root -g 2>/dev/null || true)"
-  if [[ -n "$ASK_EXT_ROOT" && -d "$ASK_EXT_ROOT/pi-ask-tool-extension" ]]; then
-    ok "pi-ask-tool-extension installed successfully"
-  else
-    warn "pi-ask-tool-extension install may have succeeded but could not be verified"
-  fi
-fi
+ASK_EXT_ROOT="$NPM_GLOBAL_ROOT"
+
+# ── 3. Install deps ──────────────────────────────────────────────
+info "Installing dependencies..."
+cd "$SCRIPT_DIR"
+"$BUN_BIN" install --frozen-lockfile 2>/dev/null || "$BUN_BIN" install
+ok "Dependencies installed"
 
 # ── 4. Create ~/.bin ──────────────────────────────────────────────
 mkdir -p "$BIN_DIR"
