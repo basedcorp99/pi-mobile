@@ -328,14 +328,9 @@ export function createSessionController({
 				onCloseMenu();
 				chatView.clear({ discardNotices: true });
 				chatView.renderHistory(activeState.messages || []);
-				if (
-					shouldUseFullHistory
-					&& connectMessageLimit > 0
-					&& Array.isArray(activeState?.messages)
-					&& activeState.messages.length >= connectMessageLimit
-				) {
-					void hydrateFullHistory(activeState?.sessionId || activeSessionId);
-				}
+			}
+			if (shouldUseFullHistory && connectMessageLimit > 0) {
+				void hydrateFullHistory(activeState?.sessionId || activeSessionId);
 			}
 			connectMessageLimit = 0;
 			onStateChange();

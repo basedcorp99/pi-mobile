@@ -1,5 +1,6 @@
 const MAX_SIDE = 1600;
-const MAX_BYTES_HINT = 4_000_000;
+// Keep pasted batches reasonably small now that the composer allows more images.
+const MAX_BYTES_HINT = 1_500_000;
 
 function bytesToBase64(dataUrl) {
 	const comma = dataUrl.indexOf(",");

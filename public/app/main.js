@@ -41,6 +41,25 @@ function haptic(ms = 10) { try { navigator.vibrate?.(ms); } catch {} }
 const sessionsList = document.getElementById("sessions-list");
 const msgs = document.getElementById("msgs");
 const input = document.getElementById("inp");
+function disableKeyboardTextAssist(el) {
+	if (!el || !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return;
+	el.setAttribute("autocomplete", "off");
+	el.setAttribute("autocorrect", "off");
+	el.setAttribute("autocapitalize", "off");
+	el.setAttribute("spellcheck", "false");
+	el.spellcheck = false;
+}
+disableKeyboardTextAssist(input);
+const keyboardAssistObserver = new MutationObserver((mutations) => {
+	for (const mutation of mutations) {
+		for (const node of mutation.addedNodes) {
+			if (!(node instanceof Element)) continue;
+			disableKeyboardTextAssist(node);
+			node.querySelectorAll?.("input, textarea").forEach(disableKeyboardTextAssist);
+		}
+	}
+});
+keyboardAssistObserver.observe(document.documentElement, { childList: true, subtree: true });
 const btnScrollBottom = document.getElementById("btn-scroll-bottom");
 const workingIndicator = document.getElementById("working");
 const workingSpin = document.getElementById("work-spin");
@@ -77,9 +96,10 @@ const btnAbortTxt = btnAbort?.querySelector?.(".txt") || null;
 const btnCompactTxt = btnCompact?.querySelector?.(".txt") || null;
 const btnReleaseTxt = btnRelease?.querySelector?.(".txt") || null;
 const btnAttach = document.getElementById("btn-attach");
-// Keep session switching snappy on mobile by loading a recent tail first.
-// Full-history hydration can be re-enabled later if we add an explicit on-demand UI.
-const LOAD_FULL_SESSION_HISTORY = false;
+// Keep session switching snappy by loading a recent tail first, then hydrate
+// the exact full transcript (including reasoning/thinking blocks) in the background.
+const LOAD_FULL_SESSION_HISTORY = true;
+const MAX_PENDING_ATTACHMENTS = 12;
 
 const btnHistory = document.getElementById("btn-history");
 const btnLastVoice = document.getElementById("btn-last-voice");
@@ -724,10 +744,18 @@ function updateAttachmentControls() {
 async function addImageFiles(files) {
 	const list = Array.from(files || []).filter((file) => file && String(file.type || "").startsWith("image/"));
 	if (list.length === 0) return;
-	const remaining = Math.max(0, 4 - pendingAttachments.length);
-	for (const file of list.slice(0, remaining)) {
+	const remaining = Math.max(0, MAX_PENDING_ATTACHMENTS - pendingAttachments.length);
+	if (remaining === 0) {
+		sessionCtrl.appendNotice(`Attachment limit is ${MAX_PENDING_ATTACHMENTS} images.`, "warning");
+		return;
+	}
+	const accepted = list.slice(0, remaining);
+	for (const file of accepted) {
 		const image = await fileToImageContent(file);
 		pendingAttachments.push(image);
+	}
+	if (list.length > accepted.length) {
+		sessionCtrl.appendNotice(`Added ${accepted.length} image${accepted.length === 1 ? "" : "s"}; ${list.length - accepted.length} over the ${MAX_PENDING_ATTACHMENTS}-image limit skipped.`, "warning");
 	}
 	renderAttachmentBar();
 	updateControls();

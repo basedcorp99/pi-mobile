@@ -1773,10 +1773,10 @@ export class PiWebRuntime {
 						mimeType: typeof (img as { mimeType?: unknown }).mimeType === "string" ? (img as { mimeType: string }).mimeType : "",
 					}))
 					.filter((img) => img.data.length > 0 && img.mimeType.startsWith("image/"))
-					.slice(0, 4)
+					.slice(0, 12)
 				: [];
 			const totalImageChars = images.reduce((sum, img) => sum + img.data.length, 0);
-			if (images.some((img) => img.data.length > 6_000_000) || totalImageChars > 12_000_000) {
+			if (images.some((img) => img.data.length > 6_000_000) || totalImageChars > 24_000_000) {
 				throw new Error("image_too_large");
 			}
 			if (text.length === 0 && images.length === 0) return;
