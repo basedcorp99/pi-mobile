@@ -41,25 +41,6 @@ function haptic(ms = 10) { try { navigator.vibrate?.(ms); } catch {} }
 const sessionsList = document.getElementById("sessions-list");
 const msgs = document.getElementById("msgs");
 const input = document.getElementById("inp");
-function disableKeyboardTextAssist(el) {
-	if (!el || !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return;
-	el.setAttribute("autocomplete", "off");
-	el.setAttribute("autocorrect", "off");
-	el.setAttribute("autocapitalize", "off");
-	el.setAttribute("spellcheck", "false");
-	el.spellcheck = false;
-}
-disableKeyboardTextAssist(input);
-const keyboardAssistObserver = new MutationObserver((mutations) => {
-	for (const mutation of mutations) {
-		for (const node of mutation.addedNodes) {
-			if (!(node instanceof Element)) continue;
-			disableKeyboardTextAssist(node);
-			node.querySelectorAll?.("input, textarea").forEach(disableKeyboardTextAssist);
-		}
-	}
-});
-keyboardAssistObserver.observe(document.documentElement, { childList: true, subtree: true });
 const btnScrollBottom = document.getElementById("btn-scroll-bottom");
 const workingIndicator = document.getElementById("working");
 const workingSpin = document.getElementById("work-spin");
